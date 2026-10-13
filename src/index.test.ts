@@ -72,20 +72,30 @@ test("initialize carries non-empty server instructions", async () => {
 });
 
 /**
- * The regression this whole flow exists for: without a token the server used to
- * exit(1) before the handshake, so the client showed a dead server and the user
- * never learned why. It must now start, list its tools, and say what to do.
+ * Without a token the server must still complete the handshake and explain a safe
+ * setup path. The hardened fork deliberately does not instruct the model to collect
+ * client_secret in chat.
  */
 test("without a token the server still starts and completes the handshake", async () => {
   const client = await connectUnconfigured();
   try {
     const tools = (await client.listTools()).tools.map((t) => t.name);
-    assert.ok(tools.includes("start_login"), "an unconfigured server must offer the login tool");
+    assert.ok(tools.includes("start_login"), "upstream auth tools remain available for now");
     assert.ok(tools.includes("list_ad_plans"), "and must not hide the real tools");
 
     const instructions = client.getInstructions() ?? "";
     assert.match(instructions, /не подключена/, "instructions must state the server is unusable");
-    assert.match(instructions, /start_login/, "and must name the tool that fixes it");
+    assert.match(instructions, /VK_ADS_TOKEN/, "instructions must name the local temporary setup");
+    assert.match(
+      instructions,
+      /Не передавайте client_secret через AI-чат/,
+      "instructions must explicitly keep the app secret out of model context",
+    );
+    assert.doesNotMatch(
+      instructions,
+      /вызовите start_login/i,
+      "instructions must not steer the model into the upstream in-chat secret flow",
+    );
   } finally {
     await client.close();
   }
@@ -100,8 +110,6 @@ test("an unconfigured data call returns actionable text, not a dead connection",
     };
     assert.equal(result.isError, true);
     const text = result.content.map((c) => c.text ?? "").join(" ");
-    // The message has to survive to the model verbatim: it is the only channel
-    // to the user, and it must stop the model from retrying a call that cannot work.
     assert.match(text, /start_login/);
     assert.match(text, /не поможет|не сбой сети/);
   } finally {
