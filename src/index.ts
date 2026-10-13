@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { TokenStore } from "./auth.js";
-import { VkAdsClient } from "./client.js";
 import { ConfigError, DEFAULT_API_BASE, loadConfig } from "./config.js";
+import { HardenedVkAdsClient } from "./hardenedClient.js";
 import { instrumentToolCalls, Telemetry } from "./telemetry.js";
 import type { VkAdsConfig } from "./types.js";
 
@@ -25,48 +25,23 @@ import { registerBannerTools } from "./tools/banners.js";
 import { registerStatisticsTools } from "./tools/statistics.js";
 import { registerRawTool } from "./tools/raw.js";
 
-/**
- * Shipped as the `instructions` of the MCP initialize result — the only prose the
- * calling model gets before it picks a tool, in every session. It carries what the
- * tool list cannot: which VK product this actually is, what the API refuses to do,
- * where the money is, and the failures that look like something else. It is charged
- * to every session's context, so keep it dense.
- */
 export const INSTRUCTIONS =
-  "VK Реклама (VK Ads) — API рекламного кабинета на ads.vk.com: объектная модель унаследована от " +
-  "myTarget, это не социальный api.vk.com. Объекты вложены: ad_plan (кампания) → ad_group (группа " +
-  "объявлений) → banner (объявление). `status` — единственное состояние, которое можно задать " +
-  "(stop ставит blocked = пауза, а не бан); `delivery` и `moderation_status` — диагностика только " +
-  "на чтение; деньги — в валюте аккаунта (рубли) как есть, без микроединиц. Запись меняет один " +
-  "объект за запрос, поэтому пакет может примениться частично — в ответе перечислены id, на " +
-  "которых произошёл сбой. Страница ограничена 250 объектами, autoPaginate — 1000 (помечается " +
-  "`_truncated`). 429 повторяются с нарастающей паузой (перед массовыми циклами — get_throttling); " +
-  "5xx и таймауты повторяются только на чтении: сорвавшаяся запись могла всё же примениться, " +
-  "поэтому перед повторным созданием нужен список. `invalid_token` — истёкший токен: после входа " +
-  "через start_login сервер обновляет его сам, а заданный в VK_ADS_TOKEN заменяет только " +
-  "пользователь. raw_request не принимает абсолютные URL, пути " +
-  "относительные и с версией. Песочницы нет: каждый вызов идёт в живой аккаунт с реальным " +
-  "бюджетом, а типизированные create/update/*_action применяются сразу — подтверждение " +
-  "confirmWrite нужно только для raw_request.";
+  "VK Реклама (VK Ads) — API рекламного кабинета на ads.vk.com. Объекты вложены: " +
+  "ad_plan (кампания) → ad_group (группа объявлений) → banner (объявление). " +
+  "Этот hardened fork по умолчанию работает в режиме read-only. VK_ADS_WRITE_MODE=draft " +
+  "разрешает только создание объектов со status=blocked и остановку существующих; " +
+  "VK_ADS_WRITE_MODE=full разрешает остальные записи. Дополнительно можно задать " +
+  "VK_ADS_MAX_DAILY_BUDGET и VK_ADS_MAX_TOTAL_BUDGET как серверные safety caps. " +
+  "Песочницы у VK Ads нет: разрешённые write-вызовы идут в живой кабинет. " +
+  "raw_request не принимает абсолютные URL; API origin закреплён на https://ads.vk.com/api. " +
+  "Телеметрия в этом форке отключена на уровне кода.";
 
-/**
- * Prepended to INSTRUCTIONS when no token is available. The model reads this
- * before it picks a tool, so an unconfigured session opens with the fix rather
- * than with a failed call.
- */
 const UNCONFIGURED_PREFIX =
-  "ВНИМАНИЕ: VK Реклама ещё не подключена — токена нет, поэтому любой инструмент данных вернёт " +
-  "ошибку. Подключение делается прямо в диалоге и без перезапуска клиента: вызовите start_login, " +
-  "покажите пользователю инструкцию, попросите создать приложение в кабинете (Настройки → Доступ " +
-  "к API) и прислать client_id и client_secret, затем передайте их в finish_login. ";
+  "ВНИМАНИЕ: VK Реклама ещё не подключена — токена нет, поэтому инструменты данных не сработают. " +
+  "Для временного безопасного подключения задайте VK_ADS_TOKEN локально в окружении MCP. " +
+  "Не передавайте client_secret через AI-чат; защищённый постоянный вход будет добавлен отдельно. ";
 
-/**
- * Loads the config without dying on a bad value. A server that exits here never
- * completes the MCP handshake, so the user sees a red cross and no reason — the
- * failure that used to account for nearly every unconfigured install. Instead the
- * problem is carried into the session, where the model can read it and relay it.
- */
-function loadConfigOrDegraded(telemetry: Telemetry): {
+function loadConfigOrDegraded(): {
   config: VkAdsConfig;
   problem?: ConfigError;
 } {
@@ -75,9 +50,6 @@ function loadConfigOrDegraded(telemetry: Telemetry): {
   } catch (err) {
     if (!(err instanceof ConfigError)) throw err;
     console.error(`Ошибка конфигурации: ${err.message}`);
-    // Fire-and-forget now that the process survives: the historical
-    // `startup_failed` funnel stays comparable, but nothing blocks startup.
-    telemetry.send("startup_failed", { reason: err.reason });
     return {
       config: {
         token: process.env.VK_ADS_TOKEN || undefined,
@@ -90,16 +62,11 @@ function loadConfigOrDegraded(telemetry: Telemetry): {
 }
 
 async function main(): Promise<void> {
-  // Anonymous usage pings (ids/names/versions only, never data or arguments);
-  // opt out with ASKADS_TELEMETRY=0. Built before the config so a missing token
-  // can be reported; wired to the server before tools register.
   const telemetry = new Telemetry(readVersion());
-  const { config, problem } = loadConfigOrDegraded(telemetry);
+  const { config, problem } = loadConfigOrDegraded();
   const tokens = new TokenStore(config.token, { apiBase: config.apiBase });
-  const client = new VkAdsClient(config, tokens);
+  const client = new HardenedVkAdsClient(config, tokens);
 
-  // Resolved once, at startup, only to pick the instructions text: the token
-  // itself is re-read per request, so a login mid-session still takes effect.
   const connected = tokens.hasToken();
 
   const server = new McpServer(
@@ -107,7 +74,6 @@ async function main(): Promise<void> {
       name: "mcp-vk-ads",
       version: readVersion(),
     },
-    // Surfaces in the initialize result, before the client sees a single tool.
     {
       instructions: connected
         ? INSTRUCTIONS
@@ -118,13 +84,6 @@ async function main(): Promise<void> {
   );
 
   instrumentToolCalls(server, telemetry);
-  server.server.oninitialized = () => {
-    telemetry.setClientInfo(server.server.getClientVersion());
-    // Split on purpose: `server_start` keeps meaning "a usable install started",
-    // so the unconfigured case gets its own event instead of inflating that number.
-    if (connected) telemetry.send("server_start");
-    else telemetry.send("unconfigured_start", { reason: problem?.reason ?? "missing_token" });
-  };
 
   registerAuthTools(server, client, tokens);
   registerAccountTools(server, client);
@@ -137,7 +96,7 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(
-    `mcp-vk-ads running on stdio${connected ? "" : " (без токена — подключение через start_login)"}`,
+    `mcp-vk-ads running on stdio${connected ? "" : " (без токена)"}`,
   );
 }
 

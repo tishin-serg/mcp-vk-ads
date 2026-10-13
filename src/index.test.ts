@@ -60,7 +60,6 @@ test("initialize carries non-empty server instructions", async () => {
     const instructions = client.getInstructions();
     assert.ok(instructions, "initialize result must carry instructions");
     assert.ok(instructions.trim().length > 0, "instructions must not be blank");
-    // Prepended to every session's context — keep it a paragraph, not a manual.
     assert.ok(
       instructions.length <= 1500,
       `instructions must stay within budget, got ${instructions.length} chars`,
@@ -71,27 +70,33 @@ test("initialize carries non-empty server instructions", async () => {
   }
 });
 
-/**
- * The regression this whole flow exists for: without a token the server used to
- * exit(1) before the handshake, so the client showed a dead server and the user
- * never learned why. It must now start, list its tools, and say what to do.
- */
 test("without a token the server still starts and completes the handshake", async () => {
   const client = await connectUnconfigured();
   try {
     const tools = (await client.listTools()).tools.map((t) => t.name);
-    assert.ok(tools.includes("start_login"), "an unconfigured server must offer the login tool");
+    assert.ok(tools.includes("start_login"), "the safe setup helper must remain available");
+    assert.ok(tools.includes("finish_login"), "the disabled legacy entrypoint must be explicit");
     assert.ok(tools.includes("list_ad_plans"), "and must not hide the real tools");
 
     const instructions = client.getInstructions() ?? "";
     assert.match(instructions, /не подключена/, "instructions must state the server is unusable");
-    assert.match(instructions, /start_login/, "and must name the tool that fixes it");
+    assert.match(instructions, /VK_ADS_TOKEN/, "instructions must name the local temporary setup");
+    assert.match(
+      instructions,
+      /Не передавайте client_secret через AI-чат/,
+      "instructions must explicitly keep the app secret out of model context",
+    );
+    assert.doesNotMatch(
+      instructions,
+      /пришлите.*client_secret/i,
+      "instructions must never ask for the app secret",
+    );
   } finally {
     await client.close();
   }
 });
 
-test("an unconfigured data call returns actionable text, not a dead connection", async () => {
+test("an unconfigured data call returns safe actionable text", async () => {
   const client = await connectUnconfigured();
   try {
     const result = (await client.callTool({ name: "get_user_info", arguments: {} })) as {
@@ -100,16 +105,16 @@ test("an unconfigured data call returns actionable text, not a dead connection",
     };
     assert.equal(result.isError, true);
     const text = result.content.map((c) => c.text ?? "").join(" ");
-    // The message has to survive to the model verbatim: it is the only channel
-    // to the user, and it must stop the model from retrying a call that cannot work.
-    assert.match(text, /start_login/);
+    assert.match(text, /VK_ADS_TOKEN/);
     assert.match(text, /не поможет|не сбой сети/);
+    assert.match(text, /Не передавайте client_secret/);
+    assert.doesNotMatch(text, /пришлите.*client_secret/i);
   } finally {
     await client.close();
   }
 });
 
-test("start_login explains where the client_id/client_secret come from", async () => {
+test("start_login gives only local-token instructions", async () => {
   const client = await connectUnconfigured();
   try {
     const result = (await client.callTool({ name: "start_login", arguments: {} })) as {
@@ -118,11 +123,31 @@ test("start_login explains where the client_id/client_secret come from", async (
     };
     assert.notEqual(result.isError, true);
     const body = JSON.parse(result.content[0]?.text ?? "{}") as {
-      settingsUrl?: string;
+      mode?: string;
       steps?: string[];
+      expectedInputs?: string[];
+      warning?: string;
     };
-    assert.match(body.settingsUrl ?? "", /^https:\/\/ads\.vk\.com\//);
-    assert.ok((body.steps ?? []).length >= 2, "the user needs the whole path, not just a link");
+    assert.equal(body.mode, "local-token-only");
+    assert.deepEqual(body.expectedInputs, []);
+    assert.ok((body.steps ?? []).some((step) => step.includes("VK_ADS_TOKEN")));
+    assert.match(body.warning ?? "", /Не отправляйте client_secret/);
+  } finally {
+    await client.close();
+  }
+});
+
+test("finish_login is disabled without accepting credentials", async () => {
+  const client = await connectUnconfigured();
+  try {
+    const result = (await client.callTool({ name: "finish_login", arguments: {} })) as {
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
+    assert.equal(result.isError, true);
+    const text = result.content.map((c) => c.text ?? "").join(" ");
+    assert.match(text, /отключён|отключено/i);
+    assert.match(text, /VK_ADS_TOKEN/);
   } finally {
     await client.close();
   }

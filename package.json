@@ -1,8 +1,9 @@
 {
   "name": "mcp-vk-ads",
   "version": "1.5.1",
-  "description": "MCP server for the VK Ads (VK Реклама) API — manage ad plans, ad groups, banners and pull statistics from AI agents.",
-  "mcpName": "io.github.askads/mcp-vk-ads",
+  "private": true,
+  "description": "Hardened fork of the VK Ads MCP server for controlled AI access to live advertising accounts.",
+  "mcpName": "io.github.tishin-serg/mcp-vk-ads-hardened",
   "type": "module",
   "bin": {
     "mcp-vk-ads": "dist/index.js"
@@ -39,14 +40,11 @@
   "author": "Aleksandr Kovalko",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/askads/mcp-vk-ads.git"
+    "url": "git+https://github.com/tishin-serg/mcp-vk-ads.git"
   },
-  "homepage": "https://github.com/askads/mcp-vk-ads#readme",
-  "bugs": {
-    "url": "https://github.com/askads/mcp-vk-ads/issues"
-  },
+  "homepage": "https://github.com/tishin-serg/mcp-vk-ads#readme",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "zod": "^3.25.0"
   },
   "devDependencies": {
