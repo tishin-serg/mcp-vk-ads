@@ -24,7 +24,7 @@ async function withTempConfig<T>(run: () => T | Promise<T>): Promise<T> {
   }
 }
 
-/** A stored login, as finish_login would have written it. */
+/** A legacy stored login retained for compatibility tests. */
 function storeLogin(overrides: Partial<Parameters<typeof writeCredentials>[0]> = {}): void {
   writeCredentials({
     client_id: "cid",
@@ -45,13 +45,13 @@ function tokenFetch(body: Record<string, unknown>): typeof fetch {
     }) as unknown as Response) as unknown as typeof fetch;
 }
 
-test("with nothing configured, getToken explains how to connect", async () => {
+test("with nothing configured, getToken explains the safe local setup", async () => {
   await withTempConfig(async () => {
     const store = new TokenStore(undefined);
     assert.equal(store.hasToken(), false);
     await assert.rejects(() => store.getToken(), AuthRequiredError);
-    // The message is the user-facing product here: it must name the tool to call.
-    await assert.rejects(() => store.getToken(), /start_login/);
+    await assert.rejects(() => store.getToken(), /VK_ADS_TOKEN/);
+    await assert.rejects(() => store.getToken(), /Не передавайте client_secret/);
   });
 });
 
@@ -121,8 +121,6 @@ test("an expired token is refreshed transparently and the new one is stored", as
 
 test("a refresh that returns no refresh_token keeps the old one", async () => {
   await withTempConfig(async () => {
-    // VK may answer a refresh with the access token alone; dropping the stored
-    // refresh_token here would strand the login at the next expiry.
     storeLogin({ access_token: "old", expires_at: Date.now() - 1000 });
     const store = new TokenStore(undefined, {
       fetchImpl: tokenFetch({ access_token: "new", expires_in: 86400 }),
@@ -133,10 +131,11 @@ test("a refresh that returns no refresh_token keeps the old one", async () => {
   });
 });
 
-test("an expired token with nothing to refresh from asks for a new login", async () => {
+test("an expired token with nothing to refresh from points to safe local setup", async () => {
   await withTempConfig(async () => {
     storeLogin({ access_token: "old", expires_at: Date.now() - 1000, refresh_token: undefined });
-    await assert.rejects(() => new TokenStore(undefined).getToken(), /start_login/);
+    await assert.rejects(() => new TokenStore(undefined).getToken(), /VK_ADS_TOKEN/);
+    await assert.rejects(() => new TokenStore(undefined).getToken(), /Не передавайте секреты/);
   });
 });
 
