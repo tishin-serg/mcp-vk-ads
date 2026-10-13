@@ -5,6 +5,25 @@ import { VkAdsError } from "./types.js";
 
 const BASE = "https://ads.vk.com/api";
 
+test("REST constructor refuses a foreign API origin before accessing credentials", () => {
+  assert.throws(() => makeClient({ apiBase: "https://evil.example/api" }), /запрещён/);
+});
+
+test("REST refuses redirects for reads and writes without retrying writes", async () => {
+  const mock = mockFetch((_url, init) => {
+    assert.equal(init.redirect, "error");
+    throw new TypeError("redirect rejected");
+  });
+  try {
+    const client = makeClient({ maxRetries: 0 });
+    await assert.rejects(client.get("v3/user.json"), /redirect rejected/);
+    await assert.rejects(client.post("v2/ad_plans.json", { status: "blocked" }), /redirect rejected/);
+    assert.equal(mock.calls.length, 2);
+  } finally {
+    mock.restore();
+  }
+});
+
 function makeClient(overrides: Partial<ConstructorParameters<typeof VkAdsClient>[0]> = {}) {
   return new VkAdsClient({
     token: "T",
@@ -43,6 +62,7 @@ test("get() hits the versioned path, sends the bearer token and parses JSON", as
     assert.deepEqual(result, { count: 0, items: [] });
     assert.equal(mock.calls[0].url, "https://ads.vk.com/api/v2/ad_plans.json?fields=id%2Cname&limit=250");
     assert.equal(mock.calls[0].init.method, "GET");
+    assert.equal(mock.calls[0].init.redirect, "error");
 
     const headers = mock.calls[0].init.headers as Record<string, string>;
     assert.equal(headers.Authorization, "Bearer T");

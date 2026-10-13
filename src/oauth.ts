@@ -11,8 +11,8 @@
  * and are renewed from `refresh_token` without asking the user again.
  */
 
-/** API root used when the caller passes none (same host as the REST API). */
-export const DEFAULT_API_BASE = "https://ads.vk.com/api";
+import { assertTrustedApiBase, DEFAULT_API_BASE } from "./config.js";
+export { DEFAULT_API_BASE } from "./config.js";
 
 /** Cabinet page where the user creates the API app and reads client_id/client_secret. */
 export const API_SETTINGS_URL = "https://ads.vk.com/hq/settings/access";
@@ -34,7 +34,7 @@ export interface TokenResponse {
 
 /** `v2/oauth2/token.json` on the configured API host. */
 export function tokenUrl(apiBase: string = DEFAULT_API_BASE): string {
-  const base = apiBase.endsWith("/") ? apiBase : `${apiBase}/`;
+  const base = `${assertTrustedApiBase(apiBase)}/`;
   return new URL("v2/oauth2/token.json", base).toString();
 }
 
@@ -95,6 +95,7 @@ async function postToken(
   try {
     res = await fetchImpl(url, {
       method: "POST",
+      redirect: "error",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(form).toString(),
       signal: controller.signal,

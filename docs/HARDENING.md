@@ -8,6 +8,10 @@ The VK Ads API origin is pinned to `https://ads.vk.com/api`. The runtime does no
 
 External usage telemetry is disabled in this fork.
 
+Authenticated REST and OAuth requests refuse HTTP redirects, including 307/308
+redirects that would otherwise replay the OAuth secret body. Both the REST client
+constructor and OAuth token URL builder validate the official API base directly.
+
 ## Write modes
 
 `VK_ADS_WRITE_MODE` controls mutation capabilities:

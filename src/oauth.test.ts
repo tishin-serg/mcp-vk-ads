@@ -5,6 +5,33 @@ import { expiresAtFrom, mintToken, refreshAccessToken, tokenUrl } from "./oauth.
 
 const BASE = "https://ads.vk.com/api";
 
+test("OAuth refuses foreign API bases before sending client or refresh secrets", async () => {
+  const impl = (async () => {
+    assert.fail("no request may reach an untrusted origin");
+  }) as typeof fetch;
+  assert.throws(() => tokenUrl("https://evil.example/api"), /запрещён/);
+  await assert.rejects(
+    mintToken({ clientId: "cid", clientSecret: "secret", apiBase: "https://evil.example/api", fetchImpl: impl }),
+    /запрещён/,
+  );
+  await assert.rejects(
+    refreshAccessToken({ clientId: "cid", clientSecret: "secret", refreshToken: "rt", apiBase: "https://evil.example/api", fetchImpl: impl }),
+    /запрещён/,
+  );
+});
+
+test("OAuth mint and refresh refuse redirects that could replay the secret body", async () => {
+  let requests = 0;
+  const impl = (async (_url: unknown, init?: RequestInit) => {
+    requests++;
+    assert.equal(init?.redirect, "error");
+    throw new TypeError("redirect rejected");
+  }) as typeof fetch;
+  await assert.rejects(mintToken({ clientId: "cid", clientSecret: "secret", fetchImpl: impl }), /redirect rejected/);
+  await assert.rejects(refreshAccessToken({ clientId: "cid", clientSecret: "secret", refreshToken: "rt", fetchImpl: impl }), /redirect rejected/);
+  assert.equal(requests, 2);
+});
+
 /** A fetch double that records the call and answers with the given status/body. */
 function stubFetch(status: number, body: unknown) {
   const calls: Array<{ url: string; init: RequestInit; form: URLSearchParams }> = [];
@@ -41,6 +68,7 @@ test("mintToken posts the client_credentials form as urlencoded", async () => {
   assert.equal(token.access_token, "at");
   assert.equal(stub.calls[0].url, "https://ads.vk.com/api/v2/oauth2/token.json");
   assert.equal(stub.calls[0].init.method, "POST");
+  assert.equal(stub.calls[0].init.redirect, "error");
   assert.equal(
     (stub.calls[0].init.headers as Record<string, string>)["Content-Type"],
     "application/x-www-form-urlencoded",
@@ -63,6 +91,7 @@ test("refreshAccessToken sends the refresh grant with the app credentials", asyn
   });
 
   assert.equal(stub.calls[0].form.get("grant_type"), "refresh_token");
+  assert.equal(stub.calls[0].init.redirect, "error");
   assert.equal(stub.calls[0].form.get("refresh_token"), "rt");
   assert.equal(stub.calls[0].form.get("client_id"), "cid");
   assert.equal(stub.calls[0].form.get("client_secret"), "secret");
