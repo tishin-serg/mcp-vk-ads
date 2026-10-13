@@ -1,12 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ConfigError, DEFAULT_API_BASE, loadConfig } from "./config.js";
+import { ConfigError, DEFAULT_API_BASE, assertTrustedApiBase, loadConfig } from "./config.js";
 
-/**
- * The reason codes below are the vocabulary the dashboard groups by — renaming
- * one silently splits a bar in two, so they are pinned here.
- */
 function withEnv(vars: Record<string, string | undefined>, run: () => void): void {
   const saved = new Map(Object.keys(vars).map((k) => [k, process.env[k]]));
   for (const [k, v] of Object.entries(vars)) {
@@ -32,13 +28,11 @@ function reasonOf(vars: Record<string, string | undefined>): string {
       caught = err;
     }
   });
-  assert.ok(caught instanceof ConfigError, "config problems must throw ConfigError, not exit");
+  assert.ok(caught instanceof ConfigError, "config problems must throw ConfigError");
   return caught.reason;
 }
 
-test("a missing token is not a config error — the login happens in the chat", () => {
-  // The server used to exit(1) here, before the MCP handshake: the client showed a
-  // dead server and the user never learned why. Now it starts and offers start_login.
+test("a missing token is not a config error", () => {
   withEnv({ VK_ADS_TOKEN: undefined, VK_ADS_API_BASE: undefined }, () => {
     const config = loadConfig();
     assert.equal(config.token, undefined);
@@ -52,8 +46,23 @@ test("a configured server loads without throwing", () => {
   });
 });
 
-test("a malformed API base reports invalid_api_base", () => {
-  // Left unchecked this surfaces much later as a bare "Invalid URL" from the client.
-  assert.equal(reasonOf({ VK_ADS_API_BASE: "ads.vk.com" }), "invalid_api_base");
-  assert.equal(reasonOf({ VK_ADS_API_BASE: "ftp://ads.vk.com/api" }), "invalid_api_base");
+test("the official VK Ads API base is accepted and normalized", () => {
+  assert.equal(assertTrustedApiBase("https://ads.vk.com/api"), DEFAULT_API_BASE);
+  assert.equal(assertTrustedApiBase("https://ads.vk.com/api/"), DEFAULT_API_BASE);
+});
+
+test("foreign, insecure and decorated API bases are rejected", () => {
+  for (const value of [
+    "ads.vk.com",
+    "http://ads.vk.com/api",
+    "https://evil.example/api",
+    "https://ads.vk.com.evil.example/api",
+    "https://ads.vk.com:444/api",
+    "https://user:pass@ads.vk.com/api",
+    "https://ads.vk.com/api?next=https://evil.example",
+    "https://ads.vk.com/api#fragment",
+    "https://ads.vk.com/other",
+  ]) {
+    assert.equal(reasonOf({ VK_ADS_API_BASE: value }), "untrusted_api_base", value);
+  }
 });
