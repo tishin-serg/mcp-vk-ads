@@ -1,41 +1,31 @@
+import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-/** Directory name under $XDG_CONFIG_HOME (or ~/.config), shared with instance-id. */
 const APP = "mcp-vk-ads";
 
-/**
- * Tokens minted by the in-chat login. Written by `finish_login`, read on every API
- * call — the file is the reason a fresh token takes effect without restarting the
- * client: nothing is cached in the process beyond one request.
- *
- * The app credentials live here too, unlike a pure OAuth flow: VK Ads re-mints an
- * access token from `refresh_token` only when `client_id` **and** `client_secret`
- * accompany it, so without them the connection would die 24 hours later.
- */
 export interface StoredCredentials {
-  /** client_id of the user's VK Ads API app; shown in auth_status. */
   client_id: string;
-  /** client_secret of that app — password-grade; never returned by any tool. */
   client_secret: string;
   access_token: string;
   refresh_token?: string;
-  /** Epoch ms after which the access token is no longer valid (VK: ~24 h). */
   expires_at?: number;
-  /** Epoch ms the token was obtained — shown in auth_status, never sent anywhere. */
   obtained_at: number;
-  /** VK Ads username the token resolved to, recorded at login for auth_status. */
   username?: string;
 }
 
-/** Absolute path of the credentials file; safe to show the user. */
+interface DpapiEnvelope {
+  format: "dpapi-v1";
+  scope: "CurrentUser";
+  ciphertext: string;
+}
+
 export function credentialsPath(): string {
   const base = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
   return join(base, APP, "credentials.json");
 }
 
-/** Reads stored credentials, or undefined when nothing is stored (or it is unreadable). */
 export function readCredentials(): StoredCredentials | undefined {
   let raw: string;
   try {
@@ -43,45 +33,138 @@ export function readCredentials(): StoredCredentials | undefined {
   } catch {
     return undefined;
   }
-  try {
-    const parsed = JSON.parse(raw) as StoredCredentials;
-    // A truncated or hand-edited file must not read as "logged in": without a
-    // usable access_token the caller has to fall through to the login flow.
-    if (typeof parsed?.access_token !== "string" || parsed.access_token === "") return undefined;
-    return parsed;
-  } catch {
-    return undefined;
+
+  if (process.platform === "win32") {
+    try {
+      const envelope = JSON.parse(raw) as Partial<DpapiEnvelope>;
+      if (
+        envelope.format !== "dpapi-v1" ||
+        envelope.scope !== "CurrentUser" ||
+        typeof envelope.ciphertext !== "string" ||
+        envelope.ciphertext === ""
+      ) {
+        return undefined;
+      }
+      return parseCredentials(unprotectWindows(envelope.ciphertext));
+    } catch {
+      return undefined;
+    }
   }
+
+  return parseCredentials(raw);
 }
 
-/**
- * Writes credentials with owner-only permissions. The mode is set on the open
- * *and* re-applied with chmod, because an existing file keeps its old mode when
- * writeFileSync merely truncates it.
- */
 export function writeCredentials(credentials: StoredCredentials): string {
   const file = credentialsPath();
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+
+  if (process.platform === "win32") {
+    const plaintext = `${JSON.stringify(credentials)}\n`;
+    const envelope: DpapiEnvelope = {
+      format: "dpapi-v1",
+      scope: "CurrentUser",
+      ciphertext: protectWindows(plaintext),
+    };
+    writeFileSync(file, `${JSON.stringify(envelope, null, 2)}\n`, "utf8");
+    return file;
+  }
+
   writeFileSync(file, `${JSON.stringify(credentials, null, 2)}\n`, { mode: 0o600 });
   try {
     chmodSync(file, 0o600);
   } catch {
-    // Windows and some network filesystems do not implement POSIX modes; the
-    // write itself succeeded, which is what the caller cares about.
+    // Some filesystems do not implement POSIX modes.
   }
   return file;
 }
 
-/** Deletes the credentials file. Returns true when a file was actually removed. */
 export function clearCredentials(): boolean {
   const file = credentialsPath();
-  if (!readCredentials() && !fileExists(file)) return false;
+  if (!fileExists(file)) return false;
   try {
     rmSync(file, { force: true });
     return true;
   } catch {
     return false;
   }
+}
+
+function parseCredentials(raw: string): StoredCredentials | undefined {
+  try {
+    const parsed = JSON.parse(raw) as Partial<StoredCredentials>;
+    if (
+      typeof parsed.client_id !== "string" ||
+      parsed.client_id === "" ||
+      typeof parsed.client_secret !== "string" ||
+      parsed.client_secret === "" ||
+      typeof parsed.access_token !== "string" ||
+      parsed.access_token === "" ||
+      typeof parsed.obtained_at !== "number"
+    ) {
+      return undefined;
+    }
+    return parsed as StoredCredentials;
+  } catch {
+    return undefined;
+  }
+}
+
+function protectWindows(plaintext: string): string {
+  return runDpapi("protect", plaintext);
+}
+
+function unprotectWindows(ciphertext: string): string {
+  return runDpapi("unprotect", ciphertext);
+}
+
+function runDpapi(mode: "protect" | "unprotect", input: string): string {
+  if (process.platform !== "win32") {
+    throw new Error("DPAPI is available only on Windows");
+  }
+
+  const prefix = [
+    "$ErrorActionPreference = 'Stop'",
+    "Add-Type -AssemblyName System.Security",
+  ];
+  const script = [
+    ...prefix,
+    ...(mode === "protect"
+      ? [
+          "$plain = [Console]::In.ReadToEnd()",
+          "$bytes = [Text.Encoding]::UTF8.GetBytes($plain)",
+          "$scope = [System.Security.Cryptography.DataProtectionScope]::CurrentUser",
+          "$protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, $scope)",
+          "[Console]::Out.Write([Convert]::ToBase64String($protected))",
+        ]
+      : [
+          "$encoded = [Console]::In.ReadToEnd().Trim()",
+          "$protected = [Convert]::FromBase64String($encoded)",
+          "$scope = [System.Security.Cryptography.DataProtectionScope]::CurrentUser",
+          "$bytes = [System.Security.Cryptography.ProtectedData]::Unprotect($protected, $null, $scope)",
+          "[Console]::Out.Write([Text.Encoding]::UTF8.GetString($bytes))",
+        ]),
+  ].join("; ");
+
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+    {
+      input,
+      encoding: "utf8",
+      windowsHide: true,
+      maxBuffer: 1024 * 1024,
+    },
+  );
+
+  if (result.error || result.status !== 0) {
+    const detail = result.stderr?.trim();
+    throw new Error(
+      `Не удалось использовать Windows DPAPI для защищённого хранения credentials${
+        detail ? `: ${detail}` : ""
+      }`,
+    );
+  }
+  return result.stdout.trim();
 }
 
 function fileExists(path: string): boolean {

@@ -7,12 +7,6 @@ import { join } from "node:path";
 import { AuthRequiredError, TokenStore } from "./auth.js";
 import { credentialsPath, readCredentials, writeCredentials } from "./credentials.js";
 
-/**
- * Every test gets its own XDG_CONFIG_HOME, so the suite never reads or writes the
- * developer's real credentials file. Awaits `run` — a synchronous finally would
- * restore the real config dir at the callback's first await, and the rest of the
- * test would then quietly read the developer's own credentials.
- */
 async function withTempConfig<T>(run: () => T | Promise<T>): Promise<T> {
   const saved = process.env.XDG_CONFIG_HOME;
   process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "mcp-vk-ads-test-"));
@@ -24,7 +18,6 @@ async function withTempConfig<T>(run: () => T | Promise<T>): Promise<T> {
   }
 }
 
-/** A legacy stored login retained for compatibility tests. */
 function storeLogin(overrides: Partial<Parameters<typeof writeCredentials>[0]> = {}): void {
   writeCredentials({
     client_id: "cid",
@@ -50,7 +43,7 @@ test("with nothing configured, getToken explains the safe local setup", async ()
     const store = new TokenStore(undefined);
     assert.equal(store.hasToken(), false);
     await assert.rejects(() => store.getToken(), AuthRequiredError);
-    await assert.rejects(() => store.getToken(), /VK_ADS_TOKEN/);
+    await assert.rejects(() => store.getToken(), /npm run auth:setup/);
     await assert.rejects(() => store.getToken(), /Не передавайте client_secret/);
   });
 });
@@ -78,7 +71,7 @@ test("a stored token is used when no env token is set", async () => {
 test("the credentials file is owner-only", async () => {
   await withTempConfig(() => {
     storeLogin();
-    if (process.platform === "win32") return; // POSIX modes are not meaningful here
+    if (process.platform === "win32") return;
     assert.equal(statSync(credentialsPath()).mode & 0o777, 0o600);
   });
 });
@@ -134,7 +127,7 @@ test("a refresh that returns no refresh_token keeps the old one", async () => {
 test("an expired token with nothing to refresh from points to safe local setup", async () => {
   await withTempConfig(async () => {
     storeLogin({ access_token: "old", expires_at: Date.now() - 1000, refresh_token: undefined });
-    await assert.rejects(() => new TokenStore(undefined).getToken(), /VK_ADS_TOKEN/);
+    await assert.rejects(() => new TokenStore(undefined).getToken(), /npm run auth:setup/);
     await assert.rejects(() => new TokenStore(undefined).getToken(), /Не передавайте секреты/);
   });
 });

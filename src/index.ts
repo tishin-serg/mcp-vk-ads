@@ -8,7 +8,6 @@ import { HardenedVkAdsClient } from "./hardenedClient.js";
 import { instrumentToolCalls, Telemetry } from "./telemetry.js";
 import type { VkAdsConfig } from "./types.js";
 
-/** Reads the package version so the server reports its real version to MCP clients. */
 function readVersion(): string {
   try {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -38,8 +37,8 @@ export const INSTRUCTIONS =
 
 const UNCONFIGURED_PREFIX =
   "ВНИМАНИЕ: VK Реклама ещё не подключена — токена нет, поэтому инструменты данных не сработают. " +
-  "Для временного безопасного подключения задайте VK_ADS_TOKEN локально в окружении MCP. " +
-  "Не передавайте client_secret через AI-чат; защищённый постоянный вход будет добавлен отдельно. ";
+  "На Windows выполните локально `npm run auth:setup` в папке hardened MCP: credentials будут сохранены через DPAPI CurrentUser. " +
+  "Не передавайте client_secret через AI-чат. Для временных/CI-сценариев можно локально задать VK_ADS_TOKEN. ";
 
 function loadConfigOrDegraded(): {
   config: VkAdsConfig;
@@ -95,9 +94,7 @@ async function main(): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(
-    `mcp-vk-ads running on stdio${connected ? "" : " (без токена)"}`,
-  );
+  console.error(`mcp-vk-ads running on stdio${connected ? "" : " (без токена)"}`);
 }
 
 main().catch((err) => {

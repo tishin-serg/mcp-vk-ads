@@ -39,16 +39,17 @@ function payload(result: CallToolResult): Record<string, unknown> {
   return JSON.parse((result.content[0] as { text: string }).text);
 }
 
-test("start_login exposes only local-token setup and never requests secrets", async () => {
+test("start_login exposes Windows local setup and never requests secrets", async () => {
   await withTempConfig(async () => {
     const tools = captureAuthTools(new TokenStore());
     const result = await tools.get("start_login")!({});
     const body = payload(result);
 
     assert.equal(result.isError, undefined);
-    assert.equal(body.mode, "local-token-only");
+    assert.equal(body.mode, "windows-local-dpapi");
     assert.deepEqual(body.expectedInputs, []);
-    assert.match(JSON.stringify(body), /VK_ADS_TOKEN/);
+    assert.match(JSON.stringify(body), /npm run auth:setup/);
+    assert.match(JSON.stringify(body), /DPAPI/);
     assert.match(String(body.warning), /Не отправляйте client_secret/);
     assert.doesNotMatch(JSON.stringify(body), /пришлите.*client_secret/i);
   });
@@ -66,6 +67,7 @@ test("finish_login is disabled and accepts no credentials", async () => {
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /отключён|отключено/i);
     assert.match(text, /client_secret/);
+    assert.match(text, /npm run auth:setup/);
     assert.equal(readCredentials(), undefined, "disabled login must never persist credentials");
   });
 });

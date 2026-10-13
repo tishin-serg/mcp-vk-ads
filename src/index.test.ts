@@ -8,12 +8,6 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-/**
- * Boots the real entrypoint as a child process and completes a real MCP handshake
- * over stdio. Run from source (`node --import tsx src/index.ts`) rather than dist/,
- * because `npm test` runs before the build in the publish lifecycle. No network:
- * the handshake never calls the VK Ads API, so a dummy token is enough.
- */
 async function connectToServer(overrides: Record<string, string | undefined> = {}): Promise<Client> {
   const repoRoot = fileURLToPath(new URL("..", import.meta.url));
   const env = Object.fromEntries(
@@ -42,11 +36,6 @@ async function connectToServer(overrides: Record<string, string | undefined> = {
   return client;
 }
 
-/**
- * A server with no token at all: no env var, and a config dir that cannot hold a
- * stored login. Both halves matter — pointing XDG_CONFIG_HOME at a fresh temp dir
- * is what keeps the developer's own credentials.json from making this pass.
- */
 async function connectUnconfigured(): Promise<Client> {
   return connectToServer({
     VK_ADS_TOKEN: undefined,
@@ -80,7 +69,7 @@ test("without a token the server still starts and completes the handshake", asyn
 
     const instructions = client.getInstructions() ?? "";
     assert.match(instructions, /не подключена/, "instructions must state the server is unusable");
-    assert.match(instructions, /VK_ADS_TOKEN/, "instructions must name the local temporary setup");
+    assert.match(instructions, /npm run auth:setup/, "instructions must name the local Windows setup");
     assert.match(
       instructions,
       /Не передавайте client_secret через AI-чат/,
@@ -105,7 +94,7 @@ test("an unconfigured data call returns safe actionable text", async () => {
     };
     assert.equal(result.isError, true);
     const text = result.content.map((c) => c.text ?? "").join(" ");
-    assert.match(text, /VK_ADS_TOKEN/);
+    assert.match(text, /npm run auth:setup/);
     assert.match(text, /не поможет|не сбой сети/);
     assert.match(text, /Не передавайте client_secret/);
     assert.doesNotMatch(text, /пришлите.*client_secret/i);
@@ -114,7 +103,7 @@ test("an unconfigured data call returns safe actionable text", async () => {
   }
 });
 
-test("start_login gives only local-token instructions", async () => {
+test("start_login gives Windows local DPAPI instructions", async () => {
   const client = await connectUnconfigured();
   try {
     const result = (await client.callTool({ name: "start_login", arguments: {} })) as {
@@ -128,10 +117,11 @@ test("start_login gives only local-token instructions", async () => {
       expectedInputs?: string[];
       warning?: string;
     };
-    assert.equal(body.mode, "local-token-only");
+    assert.equal(body.mode, "windows-local-dpapi");
     assert.deepEqual(body.expectedInputs, []);
-    assert.ok((body.steps ?? []).some((step) => step.includes("VK_ADS_TOKEN")));
+    assert.ok((body.steps ?? []).some((step) => step.includes("npm run auth:setup")));
     assert.match(body.warning ?? "", /Не отправляйте client_secret/);
+    assert.match(body.warning ?? "", /DPAPI/);
   } finally {
     await client.close();
   }
@@ -147,7 +137,7 @@ test("finish_login is disabled without accepting credentials", async () => {
     assert.equal(result.isError, true);
     const text = result.content.map((c) => c.text ?? "").join(" ");
     assert.match(text, /отключён|отключено/i);
-    assert.match(text, /VK_ADS_TOKEN/);
+    assert.match(text, /npm run auth:setup/);
   } finally {
     await client.close();
   }
