@@ -27,6 +27,20 @@ Optional hard limits:
 
 Requests above a configured cap are rejected before reaching VK Ads.
 
-## Current limitation
+## Authentication boundary
 
-Do not connect a production account yet using the upstream in-chat `finish_login` flow. The current upstream implementation stores `client_secret` and refresh credentials in a local JSON file and expects the secret to pass through the AI client. A follow-up hardening change will replace this with secure local credential storage and a local-only setup flow.
+The upstream in-chat OAuth flow is disabled. `finish_login` accepts no credentials, and `start_login` only explains the temporary local-token setup.
+
+Until a secure local credential store is implemented:
+
+- obtain the VK Ads access token outside the AI conversation;
+- provide it only to the local MCP process as `VK_ADS_TOKEN`;
+- never send `client_secret`, refresh tokens or access tokens through an AI chat.
+
+Legacy credential-reading code remains internally for compatibility/migration, but the MCP tool surface cannot create a new plaintext stored login.
+
+## Dependency and packaging boundary
+
+`@modelcontextprotocol/sdk` is pinned to a patched v1 release and CI rejects high/critical runtime dependency advisories with `npm audit --omit=dev --audit-level=high`.
+
+Upstream marketplace/plugin manifests were removed because they launched the published upstream npm package and therefore bypassed this fork's hardening. The fork is marked `private` in `package.json` and should be run from a reviewed source commit until dedicated packaging is introduced.
