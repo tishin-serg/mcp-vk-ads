@@ -10,7 +10,7 @@ import { expiresAtFrom, mintToken, refreshAccessToken, type TokenResponse } from
 /**
  * Raised when a tool needs a token and none is available. The message is the
  * whole point of the class: it is what the calling model reads and relays, so
- * it names the fix instead of the failure.
+ * it names the safe fix instead of encouraging secrets to pass through chat.
  */
 export class AuthRequiredError extends Error {
   constructor(message: string) {
@@ -41,11 +41,10 @@ export interface AuthStatus {
 
 export const NOT_CONNECTED_MESSAGE =
   "VK Реклама не подключена: нет токена доступа. " +
-  "Это не сбой сети — повторный вызов не поможет, нужно подключение. " +
-  "Вызовите инструмент start_login, покажите пользователю инструкцию, попросите прислать " +
-  "client_id и client_secret приложения из кабинета VK Рекламы (Настройки → Доступ к API), " +
-  "затем передайте их в finish_login. " +
-  "Альтернатива без диалога — задать переменную окружения VK_ADS_TOKEN в конфиге клиента.";
+  "Это не сбой сети — повторный вызов не поможет. " +
+  "Для временного безопасного подключения задайте VK_ADS_TOKEN локально в окружении MCP. " +
+  "Не передавайте client_secret или access token через AI-чат. " +
+  "Защищённый постоянный вход будет добавлен отдельным hardening-изменением.";
 
 /** Options for {@link TokenStore}; both have working defaults. */
 export interface TokenStoreOptions {
@@ -57,13 +56,12 @@ export interface TokenStoreOptions {
 /**
  * Resolves the access token for every request. Two sources, in this order:
  *
- *   env    — VK_ADS_TOKEN, the documented setup; never touched or refreshed
- *   stored — ~/.config/mcp-vk-ads/credentials.json, written by finish_login
+ *   env    — VK_ADS_TOKEN, the hardened temporary setup; never touched or refreshed
+ *   stored — legacy upstream credentials, kept readable only for compatibility
  *
- * env wins so an explicitly configured install (and CI) behaves exactly as before,
- * and the file is re-read on every call — that is what lets a login take effect
- * mid-session without restarting the client. A stored login also survives the 24 h
- * VK token lifetime on its own, which an env token cannot.
+ * The hardened fork does not expose a tool that accepts client_secret from model
+ * context. Existing legacy credentials can still be read until the secure storage
+ * migration lands.
  */
 export class TokenStore {
   private readonly apiBase?: string;
@@ -93,7 +91,7 @@ export class TokenStore {
     if (!stored.refresh_token || !stored.client_id || !stored.client_secret) {
       throw new AuthRequiredError(
         "Срок действия сохранённого токена VK Рекламы истёк, а обновить его нечем. " +
-          "Вызовите start_login и подключитесь заново.",
+          "Не передавайте секреты через AI-чат; временно используйте локальный VK_ADS_TOKEN.",
       );
     }
     const refreshed = await this.refresh();
@@ -101,9 +99,8 @@ export class TokenStore {
   }
 
   /**
-   * Mints the first token for an app the user just created in their cabinet and
-   * stores it. Every call creates a new token on VK's side (cap: 5 live tokens per
-   * client_id + user), so this belongs to `finish_login` alone, not to a retry path.
+   * Legacy helper retained for the upcoming local-only secure credential setup.
+   * It must not be exposed directly as an MCP tool that accepts client_secret.
    */
   async connect(params: { clientId: string; clientSecret: string }): Promise<StoredCredentials> {
     const response = await mintToken({
@@ -115,16 +112,13 @@ export class TokenStore {
     return this.save(response, { clientId: params.clientId, clientSecret: params.clientSecret });
   }
 
-  /**
-   * Re-mints the access token from the stored refresh token. Called on expiry and
-   * once more when the API answers 401 — a token can be revoked in the cabinet long
-   * before `expires_at`, and only the API knows that.
-   */
+  /** Re-mints the access token from legacy stored refresh credentials. */
   async refresh(): Promise<StoredCredentials> {
     const stored = readCredentials();
     if (!stored?.refresh_token || !stored.client_id || !stored.client_secret) {
       throw new AuthRequiredError(
-        "Нет сохранённых данных для обновления токена VK Рекламы — вызовите start_login заново.",
+        "Нет сохранённых данных для обновления токена VK Рекламы. " +
+          "Не передавайте секреты через AI-чат; временно используйте локальный VK_ADS_TOKEN.",
       );
     }
     const response = await refreshAccessToken({
@@ -138,8 +132,6 @@ export class TokenStore {
       clientId: stored.client_id,
       clientSecret: stored.client_secret,
       username: stored.username,
-      // VK may answer a refresh without a new refresh_token; the old one stays valid,
-      // and dropping it here would strand the login at the next expiry.
       fallbackRefreshToken: stored.refresh_token,
     });
   }
