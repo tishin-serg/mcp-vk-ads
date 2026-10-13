@@ -7,7 +7,7 @@ export type WriteMode = "read-only" | "draft" | "full";
  *
  * read-only (default): no POST/DELETE reaches VK Ads.
  * draft: collection creates are forced to status=blocked; stopping an existing
- *        object is allowed; every other mutation is blocked.
+ *        ad_plan/ad_group/banner is allowed; every other mutation is blocked.
  * full: writes are allowed, subject to optional budget caps.
  */
 export class HardenedVkAdsClient extends VkAdsClient {
@@ -41,13 +41,13 @@ export class HardenedVkAdsClient extends VkAdsClient {
         return super.request<T>(method, path, { ...opts, body: draftBody });
       }
 
-      if (isStopOnly(body)) {
+      if (isEntityItemPath(path) && isStopOnly(body)) {
         return super.request<T>(method, path, opts);
       }
 
       throw new Error(
-        "В draft-режиме разрешено только создание остановленных объектов и stop (status=blocked). " +
-          "Для остальных изменений требуется VK_ADS_WRITE_MODE=full.",
+        "В draft-режиме разрешено только создание остановленных объектов и stop (status=blocked) " +
+          "для ad_plan/ad_group/banner. Для остальных изменений требуется VK_ADS_WRITE_MODE=full.",
       );
     }
 
@@ -63,9 +63,16 @@ export function writeMode(env: NodeJS.ProcessEnv = process.env): WriteMode {
   );
 }
 
+function normalizePath(path: string): string {
+  return path.replace(/^\//, "");
+}
+
 function isCollectionCreate(path: string): boolean {
-  const normalized = path.replace(/^\//, "");
-  return ["v2/ad_plans.json", "v2/ad_groups.json", "v2/banners.json"].includes(normalized);
+  return ["v2/ad_plans.json", "v2/ad_groups.json", "v2/banners.json"].includes(normalizePath(path));
+}
+
+function isEntityItemPath(path: string): boolean {
+  return /^v2\/(ad_plans|ad_groups|banners)\/\d+\.json$/.test(normalizePath(path));
 }
 
 function isStopOnly(body: Record<string, unknown>): boolean {
