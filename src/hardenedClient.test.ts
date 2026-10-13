@@ -48,10 +48,7 @@ test("read-only is the default and blocks writes before network", async () => {
   await withEnv({ VK_ADS_WRITE_MODE: undefined }, async () => {
     await withRecordingFetch(async (bodies) => {
       const client = new HardenedVkAdsClient(config);
-      await assert.rejects(
-        client.post("v2/ad_plans.json", { name: "test" }),
-        /read-only/,
-      );
+      await assert.rejects(client.post("v2/ad_plans.json", { name: "test" }), /read-only/);
       assert.equal(bodies.length, 0);
     });
   });
@@ -67,13 +64,17 @@ test("draft creation is forced to blocked status", async () => {
   });
 });
 
-test("draft mode allows stop but blocks arbitrary updates", async () => {
+test("draft mode allows stop only on known ad entity item paths", async () => {
   await withEnv({ VK_ADS_WRITE_MODE: "draft" }, async () => {
     await withRecordingFetch(async (bodies) => {
       const client = new HardenedVkAdsClient(config);
       await client.post("v2/ad_plans/123.json", { status: "blocked" });
       assert.equal(bodies.length, 1);
 
+      await assert.rejects(
+        client.post("v2/oauth2/token/delete.json", { status: "blocked" }),
+        /VK_ADS_WRITE_MODE=full/,
+      );
       await assert.rejects(
         client.post("v2/ad_plans/123.json", { budget_limit_day: 5000 }),
         /VK_ADS_WRITE_MODE=full/,
