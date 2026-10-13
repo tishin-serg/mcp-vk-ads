@@ -1,10 +1,6 @@
 import type { VkAdsConfig } from "./types.js";
 
-/**
- * A missing or malformed environment variable. Thrown instead of exiting on the
- * spot so index.ts can report the drop-off before the process dies; `reason` is
- * the machine-readable code that ships with that ping (never a variable's value).
- */
+/** A malformed or unsafe environment configuration. */
 export class ConfigError extends Error {
   readonly reason: string;
 
@@ -15,27 +11,55 @@ export class ConfigError extends Error {
   }
 }
 
+/**
+ * The only API root this hardened fork is allowed to send VK Ads credentials to.
+ * Keeping this fixed prevents a poisoned environment variable from redirecting
+ * Bearer tokens or OAuth client_secret values to a foreign host.
+ */
 export const DEFAULT_API_BASE = "https://ads.vk.com/api";
+
+/** Validate and normalize an API base before any authenticated request is built. */
+export function assertTrustedApiBase(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ConfigError(`Некорректный адрес VK Ads API: "${value}".`, "untrusted_api_base");
+  }
+
+  const trustedPath = url.pathname === "/api" || url.pathname === "/api/";
+  const trusted =
+    url.protocol === "https:" &&
+    url.hostname === "ads.vk.com" &&
+    url.port === "" &&
+    url.username === "" &&
+    url.password === "" &&
+    url.search === "" &&
+    url.hash === "" &&
+    trustedPath;
+
+  if (!trusted) {
+    throw new ConfigError(
+      `Небезопасный VK Ads API base запрещён: "${value}". Разрешён только ${DEFAULT_API_BASE}.`,
+      "untrusted_api_base",
+    );
+  }
+
+  return DEFAULT_API_BASE;
+}
 
 /**
  * Builds the client config from environment variables.
  *
- * A missing token is NOT an error here: the server starts anyway and the token is
- * resolved per request (env → stored credentials), so an unconfigured install can
- * connect from the chat instead of dying before the MCP handshake — which is where
- * it used to leave the user with a silent red cross and nothing to read. A
- * malformed value still throws, because guessing what the user meant is worse.
+ * A missing token is not a config error: the server may still start and explain
+ * how to connect. VK_ADS_API_BASE is accepted only when it resolves to the exact
+ * official VK Ads API origin; arbitrary overrides are intentionally forbidden.
  */
 export function loadConfig(): VkAdsConfig {
   const token = process.env.VK_ADS_TOKEN || undefined;
-
-  const apiBase = process.env.VK_ADS_API_BASE || DEFAULT_API_BASE;
-  if (!isHttpUrl(apiBase)) {
-    throw new ConfigError(
-      `VK_ADS_API_BASE должен быть http(s)-адресом, получено "${apiBase}".`,
-      "invalid_api_base",
-    );
-  }
+  const apiBase = process.env.VK_ADS_API_BASE
+    ? assertTrustedApiBase(process.env.VK_ADS_API_BASE)
+    : DEFAULT_API_BASE;
 
   const timeoutMs = Number(process.env.VK_ADS_TIMEOUT_MS);
   const maxRetries = Number(process.env.VK_ADS_MAX_RETRIES);
@@ -46,13 +70,4 @@ export function loadConfig(): VkAdsConfig {
     timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000,
     maxRetries: Number.isFinite(maxRetries) && maxRetries >= 0 ? maxRetries : 3,
   };
-}
-
-function isHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
 }
