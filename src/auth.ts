@@ -42,9 +42,10 @@ export interface AuthStatus {
 export const NOT_CONNECTED_MESSAGE =
   "VK Реклама не подключена: нет токена доступа. " +
   "Это не сбой сети — повторный вызов не поможет. " +
-  "Для временного безопасного подключения задайте VK_ADS_TOKEN локально в окружении MCP. " +
+  "На Windows запустите локально `npm run auth:setup` в папке hardened MCP: " +
+  "команда сама получит токен и сохранит credentials через DPAPI CurrentUser. " +
   "Не передавайте client_secret или access token через AI-чат. " +
-  "Защищённый постоянный вход будет добавлен отдельным hardening-изменением.";
+  "Для временных/CI-сценариев можно локально задать VK_ADS_TOKEN.";
 
 /** Options for {@link TokenStore}; both have working defaults. */
 export interface TokenStoreOptions {
@@ -56,12 +57,10 @@ export interface TokenStoreOptions {
 /**
  * Resolves the access token for every request. Two sources, in this order:
  *
- *   env    — VK_ADS_TOKEN, the hardened temporary setup; never touched or refreshed
- *   stored — legacy upstream credentials, kept readable only for compatibility
+ *   env    — VK_ADS_TOKEN, explicitly supplied by the local runtime; never refreshed
+ *   stored — credentials created by local setup; DPAPI-protected on Windows
  *
- * The hardened fork does not expose a tool that accepts client_secret from model
- * context. Existing legacy credentials can still be read until the secure storage
- * migration lands.
+ * The hardened fork does not expose a model-facing tool that accepts client_secret.
  */
 export class TokenStore {
   private readonly apiBase?: string;
@@ -91,7 +90,7 @@ export class TokenStore {
     if (!stored.refresh_token || !stored.client_id || !stored.client_secret) {
       throw new AuthRequiredError(
         "Срок действия сохранённого токена VK Рекламы истёк, а обновить его нечем. " +
-          "Не передавайте секреты через AI-чат; временно используйте локальный VK_ADS_TOKEN.",
+          "Не передавайте секреты через AI-чат; на Windows повторно запустите `npm run auth:setup` локально.",
       );
     }
     const refreshed = await this.refresh();
@@ -99,8 +98,8 @@ export class TokenStore {
   }
 
   /**
-   * Legacy helper retained for the upcoming local-only secure credential setup.
-   * It must not be exposed directly as an MCP tool that accepts client_secret.
+   * Local-only helper used by the Windows setup CLI. It must never be exposed as
+   * an MCP tool accepting client_secret from model context.
    */
   async connect(params: { clientId: string; clientSecret: string }): Promise<StoredCredentials> {
     const response = await mintToken({
@@ -112,13 +111,13 @@ export class TokenStore {
     return this.save(response, { clientId: params.clientId, clientSecret: params.clientSecret });
   }
 
-  /** Re-mints the access token from legacy stored refresh credentials. */
+  /** Re-mints the access token from protected stored refresh credentials. */
   async refresh(): Promise<StoredCredentials> {
     const stored = readCredentials();
     if (!stored?.refresh_token || !stored.client_id || !stored.client_secret) {
       throw new AuthRequiredError(
         "Нет сохранённых данных для обновления токена VK Рекламы. " +
-          "Не передавайте секреты через AI-чат; временно используйте локальный VK_ADS_TOKEN.",
+          "Не передавайте секреты через AI-чат; на Windows повторно запустите `npm run auth:setup` локально.",
       );
     }
     const response = await refreshAccessToken({

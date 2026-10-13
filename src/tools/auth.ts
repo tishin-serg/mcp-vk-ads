@@ -7,9 +7,8 @@ import { fail, ok, READ_ONLY, WRITE_DELETE } from "./util.js";
  * Authentication tools for the hardened fork.
  *
  * The upstream in-chat OAuth flow accepted client_secret as a model tool argument.
- * This fork deliberately disables that path: secrets must not pass through AI
- * context. Until secure local credential storage is implemented, use VK_ADS_TOKEN
- * in the local MCP process environment.
+ * This fork deliberately disables that path. On Windows, credentials are entered
+ * locally through `npm run auth:setup` and stored with DPAPI CurrentUser.
  */
 export function registerAuthTools(
   server: McpServer,
@@ -22,7 +21,7 @@ export function registerAuthTools(
       title: "Статус подключения к VK Рекламе",
       annotations: READ_ONLY,
       description:
-        "Показывает, подключена ли VK Реклама, источник токена и путь legacy-файла credentials. Не возвращает токен или client_secret и не делает сетевой запрос.",
+        "Показывает, подключена ли VK Реклама, источник токена и путь локального credential-файла. Не возвращает токен или client_secret и не делает сетевой запрос.",
       inputSchema: {},
     },
     async () => {
@@ -40,20 +39,21 @@ export function registerAuthTools(
       title: "Инструкция безопасного подключения VK Рекламы",
       annotations: READ_ONLY,
       description:
-        "Показывает безопасный временный способ подключения hardened-форка. Не просит и не принимает client_secret: секреты нельзя передавать через AI-чат.",
+        "Показывает безопасный local-only способ подключения hardened-форка. Не просит и не принимает client_secret: секреты нельзя передавать через AI-чат.",
       inputSchema: {},
     },
     async () =>
       ok({
-        mode: "local-token-only",
+        mode: "windows-local-dpapi",
         steps: [
-          "Получите access token VK Ads вне AI-чата.",
-          "Задайте его локально для процесса MCP как переменную окружения VK_ADS_TOKEN.",
+          "На Windows откройте PowerShell/Windows Terminal в локальной папке hardened MCP.",
+          "Выполните `npm run auth:setup` и введите client_id и client_secret только в локальном терминале.",
+          "Команда проверит кабинет VK Ads и сохранит credentials через Windows DPAPI CurrentUser.",
           "Перезапустите MCP и вызовите auth_status для проверки подключения.",
         ],
         warning:
           "Не отправляйте client_secret, refresh_token или access token в AI-чат. " +
-          "Защищённый постоянный вход будет добавлен отдельным hardening-изменением.",
+          "На Windows credential-файл содержит только DPAPI ciphertext, привязанный к текущему пользователю ОС.",
         expectedInputs: [],
       }),
   );
@@ -70,7 +70,7 @@ export function registerAuthTools(
     async () =>
       fail(
         "In-chat OAuth отключён политикой безопасности. Не передавайте client_secret через AI-чат. " +
-          "Временно используйте локальный VK_ADS_TOKEN; безопасный persistent login будет добавлен отдельно.",
+          "На Windows выполните `npm run auth:setup` локально в папке MCP.",
       ),
   );
 
@@ -80,7 +80,7 @@ export function registerAuthTools(
       title: "Отключить VK Рекламу",
       annotations: WRITE_DELETE,
       description:
-        "Удаляет legacy-сохранённые credentials с диска. Токен из VK_ADS_TOKEN не меняет — его нужно удалить из локального окружения MCP.",
+        "Удаляет сохранённые credentials с диска. На Windows файл зашифрован DPAPI CurrentUser. Токен из VK_ADS_TOKEN не меняет — его нужно удалить из локального окружения MCP.",
       inputSchema: {},
     },
     async () => {
@@ -89,8 +89,8 @@ export function registerAuthTools(
         return ok({
           removed,
           note: removed
-            ? "Legacy-сохранённые данные подключения удалены."
-            : "Legacy-сохранённого подключения не было — удалять нечего.",
+            ? "Сохранённые данные подключения удалены."
+            : "Сохранённого подключения не было — удалять нечего.",
           envTokenStillSet: tokens.status().source === "env",
         });
       } catch (e) {

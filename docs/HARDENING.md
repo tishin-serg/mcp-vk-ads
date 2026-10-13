@@ -29,18 +29,51 @@ Requests above a configured cap are rejected before reaching VK Ads.
 
 ## Authentication boundary
 
-The upstream in-chat OAuth flow is disabled. `finish_login` accepts no credentials, and `start_login` only explains the temporary local-token setup.
+The upstream in-chat OAuth flow is disabled. `finish_login` accepts no credentials.
 
-Until a secure local credential store is implemented:
+On Windows, persistent credentials are created only by the local interactive command:
 
-- obtain the VK Ads access token outside the AI conversation;
-- provide it only to the local MCP process as `VK_ADS_TOKEN`;
-- never send `client_secret`, refresh tokens or access tokens through an AI chat.
+```text
+npm run auth:setup
+```
 
-Legacy credential-reading code remains internally for compatibility/migration, but the MCP tool surface cannot create a new plaintext stored login.
+The command:
+
+1. reads `client_id` and a hidden `client_secret` from the local TTY;
+2. mints the token only against the pinned VK Ads API origin;
+3. verifies the actual account with `v3/user.json`;
+4. deletes the stored credentials if verification fails;
+5. stores the complete credential payload with Windows DPAPI `CurrentUser`.
+
+The plaintext secret is never passed in argv or environment variables. When Node invokes PowerShell for DPAPI, the plaintext/ciphertext is sent over child-process stdin.
+
+On Windows, legacy plaintext credential files are refused rather than silently accepted. A fresh `npm run auth:setup` is required to create a DPAPI envelope.
+
+`VK_ADS_TOKEN` remains supported as an explicit local environment override for CI and temporary setups. It is never echoed by `auth_status`.
+
+## Storage boundary
+
+The Windows credential file is a JSON envelope containing only:
+
+- format marker `dpapi-v1`;
+- scope marker `CurrentUser`;
+- DPAPI ciphertext.
+
+`client_secret`, access token and refresh token must not appear as plaintext in the file. CI includes a native Windows round-trip test that encrypts, reads and decrypts credentials under the same Windows account and asserts that the raw file contains none of those secret values.
 
 ## Dependency and packaging boundary
 
 `@modelcontextprotocol/sdk` is pinned to a patched v1 release and CI rejects high/critical runtime dependency advisories with `npm audit --omit=dev --audit-level=high`.
 
 Upstream marketplace/plugin manifests were removed because they launched the published upstream npm package and therefore bypassed this fork's hardening. The fork is marked `private` in `package.json` and should be run from a reviewed source commit until dedicated packaging is introduced.
+
+## CI platforms
+
+The main test matrix covers:
+
+- Ubuntu / Node 20;
+- Ubuntu / Node 22;
+- Ubuntu / Node 24;
+- Windows / Node 22.
+
+The Windows leg is mandatory because DPAPI and the local Windows build path cannot be validated on Linux.
