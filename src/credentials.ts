@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { validateAuthTarget, type AuthTarget } from "./authTarget.js";
 
 const APP = "mcp-vk-ads";
 
@@ -13,6 +14,7 @@ export interface StoredCredentials {
   expires_at?: number;
   obtained_at: number;
   username?: string;
+  target?: AuthTarget;
 }
 
 interface DpapiEnvelope {
@@ -103,6 +105,8 @@ function parseCredentials(raw: string): StoredCredentials | undefined {
     ) {
       return undefined;
     }
+    if (parsed.target !== undefined) parsed.target = validateAuthTarget(parsed.target);
+    if (parsed.target?.type === "agency-client" && parsed.username !== parsed.target.agencyClientName) return undefined;
     return parsed as StoredCredentials;
   } catch {
     return undefined;

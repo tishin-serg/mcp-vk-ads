@@ -6,6 +6,8 @@ import {
   type StoredCredentials,
 } from "./credentials.js";
 import { expiresAtFrom, mintToken, refreshAccessToken, type TokenResponse } from "./oauth.js";
+import { validateAuthTarget, type AuthTarget } from "./authTarget.js";
+import { AccountMismatchError, verifyTokenAccount } from "./accountVerification.js";
 
 /**
  * Raised when a tool needs a token and none is available. The message is the
@@ -36,6 +38,7 @@ export interface AuthStatus {
   clientId?: string;
   /** VK Ads username the token resolved to at login. */
   username?: string;
+  target?: AuthTarget;
   path: string;
 }
 
@@ -101,7 +104,8 @@ export class TokenStore {
    * Local-only helper used by the Windows setup CLI. It must never be exposed as
    * an MCP tool accepting client_secret from model context.
    */
-  async connect(params: { clientId: string; clientSecret: string }): Promise<StoredCredentials> {
+  async connect(params: { clientId: string; clientSecret: string; target?: AuthTarget }): Promise<StoredCredentials> {
+    if (params.target?.type === "agency-client") return this.connectVerified(params);
     const response = await mintToken({
       clientId: params.clientId,
       clientSecret: params.clientSecret,
@@ -109,6 +113,15 @@ export class TokenStore {
       fetchImpl: this.fetchImpl,
     });
     return this.save(response, { clientId: params.clientId, clientSecret: params.clientSecret });
+  }
+
+  /** CLI entry: verify in memory BEFORE replacing any existing credential file. */
+  async connectVerified(params: { clientId: string; clientSecret: string; target?: AuthTarget }): Promise<StoredCredentials> {
+    const target = validateAuthTarget(params.target);
+    const response = await mintToken({ ...params, target, apiBase: this.apiBase, fetchImpl: this.fetchImpl });
+    const user = await verifyTokenAccount(response.access_token, target, { apiBase: this.apiBase, fetchImpl: this.fetchImpl });
+    const boundTarget: AuthTarget = target.type === "agency-client" ? { ...target, userId: user.id } : target;
+    return this.save(response, { ...params, target: boundTarget, username: user.username });
   }
 
   /** Re-mints the access token from protected stored refresh credentials. */
@@ -127,11 +140,25 @@ export class TokenStore {
       apiBase: this.apiBase,
       fetchImpl: this.fetchImpl,
     });
+    const target = validateAuthTarget(stored.target);
+    if (target.type === "agency-client") {
+      try {
+        await verifyTokenAccount(response.access_token, target, { apiBase: this.apiBase, fetchImpl: this.fetchImpl });
+      } catch (error) {
+        // Discard a known wrong account, but never delete a newer local login.
+        if (error instanceof AccountMismatchError && readCredentials()?.access_token === stored.access_token) clearCredentials();
+        throw error;
+      }
+      if (readCredentials()?.access_token !== stored.access_token) {
+        throw new Error("Локальное подключение изменилось во время refresh; старый результат не сохранён.");
+      }
+    }
     return this.save(response, {
       clientId: stored.client_id,
       clientSecret: stored.client_secret,
       username: stored.username,
       fallbackRefreshToken: stored.refresh_token,
+      target: stored.target,
     });
   }
 
@@ -149,6 +176,7 @@ export class TokenStore {
       clientSecret: string;
       username?: string;
       fallbackRefreshToken?: string;
+      target?: AuthTarget;
     },
     now = Date.now(),
   ): StoredCredentials {
@@ -160,6 +188,7 @@ export class TokenStore {
       expires_at: expiresAtFrom(response.expires_in, now),
       obtained_at: now,
       username: app.username,
+      target: app.target,
     };
     writeCredentials(credentials);
     return credentials;
@@ -191,6 +220,7 @@ export class TokenStore {
       canRefresh: Boolean(stored.refresh_token && stored.client_id && stored.client_secret),
       clientId: stored.client_id,
       username: stored.username,
+      target: stored.target,
       path,
     };
   }

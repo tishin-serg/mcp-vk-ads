@@ -41,14 +41,55 @@ npm run auth:setup
 - `client_id`;
 - `client_secret`.
 
+Сначала выберите тип подключения:
+
+- **Own / manager** — `client_credentials`, собственный кабинет.
+- **Agency / manager client** — временный manager token в памяти, чтение списка
+  клиентов через `GET v3/manager/clients.json`, выбор клиента и выпуск
+  `agency_client_credentials` с `agency_client_name=<username/login>`.
+
+В списке показываются login, имя (если API его вернул) и `user.id`; ID связи
+manager↔client не используется как ID рекламного пользователя. Если список
+недоступен, setup попросит точный login, а не произвольный numeric ID.
+
+Пример целевого локального подключения:
+
+```text
+manager 18752958
+        ↓
+client 707b7e2f6b@agency_client
+        ↓
+per-client OAuth token
+        ↓
+MCP (read-only)
+```
+
+Эти значения не зашиты в runtime. Для локальной проверки можно задать только
+несекретные ограничения `VK_ADS_EXPECTED_MANAGER_ID` и
+`VK_ADS_EXPECTED_AGENCY_CLIENT_NAME` перед setup. Другие клиенты не выбираются
+автоматически. Заданный expected login — явный выбор пользователя: setup
+сразу использует agency-режим и только этот login, без выбора другого клиента.
+
+Agency token проверяется через `GET v3/user.json` **до сохранения**: username
+должен совпасть с выбранным login, а user ID — с выбранным ID, если он известен.
+При несовпадении новый token не сохраняется и старое подключение не удаляется.
+Refresh использует `grant_type=refresh_token` с app credentials, затем повторно
+проверяет исходные username и ID до принятия token. Возврата к manager grant нет.
+При подтверждённом несовпадении после refresh старые agency credentials удаляются;
+при временной сетевой ошибке token не принимается, а файл сохраняется для retry.
+
+Исследованный OAuth contract и ограничения доказательств:
+[`docs/OAUTH-CONTRACT.md`](./docs/OAUTH-CONTRACT.md).
+
 `client_secret` вводится скрыто в локальном терминале. Его не нужно и нельзя присылать в ChatGPT.
 
 Setup:
 
 1. получает токен только с официального `https://ads.vk.com/api`;
 2. проверяет живым запросом, в какой VK Ads кабинет попал;
-3. сохраняет `client_secret`, access token и refresh token через Windows DPAPI `CurrentUser`;
-4. при неуспешной проверке удаляет сохранённые credentials.
+3. только после успешной проверки сохраняет app credentials, access/refresh token
+   и выбранный auth target через Windows DPAPI `CurrentUser`;
+4. при неуспешной проверке не сохраняет новый token и не заменяет старый файл.
 
 Файл `~/.config/mcp-vk-ads/credentials.json` на Windows содержит только DPAPI ciphertext. Расшифровать его может Windows-контекст того пользователя, под которым был выполнен setup.
 
@@ -61,6 +102,15 @@ Setup:
 ```powershell
 npm start
 ```
+
+Простой Windows launcher (секретов внутри нет, режим по умолчанию read-only):
+
+```powershell
+powershell.exe -NoProfile -File .\scripts\start-windows.ps1
+```
+
+Явный `-Mode draft` / `-Mode full` действует только на текущий процесс; launcher
+требует оба утверждённых budget cap. Не включайте full постоянно.
 
 Для MCP-клиента запускайте локальный файл:
 

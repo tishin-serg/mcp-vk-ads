@@ -13,6 +13,7 @@
 
 import { assertTrustedApiBase, DEFAULT_API_BASE } from "./config.js";
 export { DEFAULT_API_BASE } from "./config.js";
+import { validateAuthTarget, type AuthTarget } from "./authTarget.js";
 
 /** Cabinet page where the user creates the API app and reads client_id/client_secret. */
 export const API_SETTINGS_URL = "https://ads.vk.com/hq/settings/access";
@@ -45,14 +46,17 @@ export function tokenUrl(apiBase: string = DEFAULT_API_BASE): string {
 export async function mintToken(params: {
   clientId: string;
   clientSecret: string;
+  target?: AuthTarget;
   apiBase?: string;
   fetchImpl?: typeof fetch;
 }): Promise<TokenResponse> {
+  const target = validateAuthTarget(params.target);
   return postToken(
     {
-      grant_type: "client_credentials",
+      grant_type: target.type === "own" ? "client_credentials" : "agency_client_credentials",
       client_id: params.clientId,
       client_secret: params.clientSecret,
+      ...(target.type === "agency-client" ? { agency_client_name: target.agencyClientName } : {}),
     },
     params.apiBase,
     params.fetchImpl,
@@ -105,7 +109,7 @@ async function postToken(
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error(`Запрос к ${url} превысил таймаут ${OAUTH_TIMEOUT_MS} мс`);
     }
-    throw err;
+    throw new Error("VK OAuth request failed (network or redirect rejected).");
   } finally {
     clearTimeout(timer);
   }
@@ -117,10 +121,16 @@ async function postToken(
     body = text;
   }
 
-  if (!res.ok) throw new Error(describeOAuthError(res.status, body));
+  if (!res.ok) {
+    let message = describeOAuthError(res.status, body);
+    for (const secret of [form.client_secret, form.refresh_token]) {
+      if (secret) message = message.split(secret).join("[REDACTED]");
+    }
+    throw new Error(message);
+  }
 
   const token = body as TokenResponse;
-  if (!token || typeof token.access_token !== "string") {
+  if (!token || typeof token.access_token !== "string" || !token.access_token) {
     throw new Error("VK Реклама вернула ответ без access_token.");
   }
   return token;
@@ -165,8 +175,8 @@ function describeOAuthError(status: number, body: unknown): string {
     case "expired_token":
       return (
         "Refresh-токен VK Рекламы больше не действует: он умирает после месяца без " +
-        "обновления, а также если доступ отозвали. Подключитесь заново — start_login, " +
-        "затем finish_login." +
+        "обновления, а также если доступ отозвали. start_login покажет инструкции; " +
+        "повторите npm run auth:setup локально на Windows." +
         tail
       );
     case "revoked_token":

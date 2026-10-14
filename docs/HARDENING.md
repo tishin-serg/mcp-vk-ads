@@ -46,8 +46,24 @@ The command:
 1. reads `client_id` and a hidden `client_secret` from the local TTY;
 2. mints the token only against the pinned VK Ads API origin;
 3. verifies the actual account with `v3/user.json`;
-4. deletes the stored credentials if verification fails;
-5. stores the complete credential payload with Windows DPAPI `CurrentUser`.
+4. rejects a mismatched agency username or user ID before storing the candidate;
+5. stores the complete credential payload and typed auth target with Windows DPAPI `CurrentUser`.
+
+Local setup supports own and agency-client targets. Temporary manager tokens used
+for `GET v3/manager/clients.json` are never written to disk. No tool accepts a
+secret or changes the selected target. The OAuth client uses `agency_client_name`
+(login), not a manager cabinet ID. See [OAuth evidence](./OAUTH-CONTRACT.md).
+
+Agency refresh uses the ordinary refresh-token grant. Every refreshed candidate
+is checked against the stored username AND verified user ID before use/storage.
+A confirmed account mismatch removes invalid agency credentials, guarded against
+deleting a newer login. A failed setup preserves any previous verified login;
+failed candidates never reach persistent storage. Malformed target metadata is
+refused rather than silently treated as own-account authentication.
+
+Provider/fetch auth errors are sanitized: secrets supplied to OAuth are redacted,
+and local verification does not return response bodies or request headers.
+All new agency tests run in the existing native Windows CI leg, including DPAPI.
 
 The plaintext secret is never passed in argv or environment variables. When Node invokes PowerShell for DPAPI, the plaintext/ciphertext is sent over child-process stdin.
 
