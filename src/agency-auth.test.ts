@@ -118,6 +118,18 @@ test("malformed stored target is refused instead of downgraded to own account", 
   assert.throws(() => validateAuthTarget({ type: "unknown" }));
 });
 
+test("an invalid explicit target cannot silently mint an own-account token", async () => {
+  await isolated(async () => {
+    let networkCalls = 0;
+    const mock = network(() => { networkCalls++; return token; });
+    await assert.rejects(new TokenStore(undefined, { fetchImpl: mock.fetchImpl }).connect({
+      clientId: "cid", clientSecret: secret, target: { type: "unknown" } as unknown as AuthTarget,
+    }), /Некорректный/);
+    assert.equal(networkCalls, 0);
+    assert.equal(existsSync(credentialsPath()), false);
+  });
+});
+
 test("unparseable persisted agency metadata cannot be used as own credentials", async () => {
   await isolated(async () => {
     writeCredentials({ client_id: "cid", client_secret: secret, access_token: at, obtained_at: 1,

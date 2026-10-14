@@ -105,10 +105,12 @@ export class TokenStore {
    * an MCP tool accepting client_secret from model context.
    */
   async connect(params: { clientId: string; clientSecret: string; target?: AuthTarget }): Promise<StoredCredentials> {
-    if (params.target?.type === "agency-client") return this.connectVerified(params);
+    const target = validateAuthTarget(params.target);
+    if (target.type === "agency-client") return this.connectVerified({ ...params, target });
     const response = await mintToken({
       clientId: params.clientId,
       clientSecret: params.clientSecret,
+      target,
       apiBase: this.apiBase,
       fetchImpl: this.fetchImpl,
     });
