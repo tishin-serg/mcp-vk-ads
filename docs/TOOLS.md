@@ -40,6 +40,10 @@ OAuth refresh выполняется локальным TokenStore с повто
 | `upload_image` | JPEG/PNG base64 + width/height + confirmWrite=true; full; POST `v2/content/static.json`, multipart file/data. Возвращает фактические id/variants. Не читает файлы/URL. |
 
 `create_banner` использует POST `v2/ad_groups/{id}/banners.json`, а не верхний список.
+`create_ad_plan` требует непустой adGroups (совместимо с extra.ad_groups) и создаёт
+первые группы вместе с кампанией, JSON-поле — ad_groups. Пустой create, existing
+group IDs и конфликт двух способов ввода отклоняются до сети. Возвращаются
+GET-проверенные кампания и её группы. Общий и дневной бюджет одновременно не задавать.
 Typed create/update/action после записи читают объект через GET. Если проверка
 не удалась, ошибка явно сообщает, что write принят и его нельзя повторять вслепую.
 

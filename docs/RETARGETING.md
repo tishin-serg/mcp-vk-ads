@@ -66,6 +66,25 @@ relations отдельным запросом. pads_trees проигнориро
 
 ## 3. Минимальная доработка
 
+### Исправление после controlled smoke, 2026-10-17
+
+Первый standalone create_ad_plan получил 400 campaigns/required; пустых объектов
+не создано. Теперь tool требует adGroups (либо совместимый extra.ad_groups),
+отправляет документированный ad_groups и читает новые группы отдельным GET.
+Подмена входов и существующие group IDs отклоняются до сети. Campaigns в ответе
+валидатора не используется как недокументированное wire-поле.
+
+Следующий controlled POST с ad_groups прошёл дальше прежней ошибки, но был
+отклонён из-за одновременных budget_limit/budget_limit_day. Теперь эта комбинация
+тоже блокируется локально, включая вложенные объекты. Smoke остановлен на 400:
+успешное создание/минимальный бюджет/upload/banner ещё не подтверждены. Новых
+объектов не создано, full не включался. Тесты проверяют payload, draft/caps и
+GET родителя/детей; это не заменяет успешный live write.
+
+Первую группу создавать вместе с кампанией; create_ad_group нужен для следующих
+групп уже существующей кампании. В следующем согласованном smoke достаточно
+одного вида бюджета. Бюджет 0,01 из отклонённых запросов не признан допустимым.
+
 - Один новый tool upload_image: JPEG/PNG base64 + width/height + confirmWrite=true
   → native multipart file + JSON data={width,height} → фактические id/variants VK.
   Без новых зависимостей, URL fetching и чтения локальных файлов.
@@ -117,7 +136,7 @@ Base64 изображения может упереться в лимиты MCP-
    Cn и negative свежими корзинами/покупками; pass_condition = число условий.
    Не редактировать используемые сегменты. upload_image для новых изображений;
    raw POST urls.json для новых ссылок. Каждый вызов явный; raw/upload с confirmWrite.
-4. Draft: create_ad_plan → create_ad_group → create_banner, с явными бюджетами,
+4. Draft: create_ad_plan(adGroups=[первая группа]) → create_ad_group (следующие группы) → create_banner, с явными бюджетами,
    датами, package_id, pricelist_id, targetings, enable_utm/utm. Можно передать
    banners[] через extra при создании группы — вложенные статусы тоже blocked.
 5. Проверить GET каждого объекта, реальные статусы/бюджеты/таргетинги/UTM,

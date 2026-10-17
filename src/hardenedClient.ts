@@ -101,7 +101,7 @@ function asRecord(body: unknown): Record<string, unknown> {
 // Every created child must be stopped too, before a future activation of its parent.
 function stoppedTree(body: Record<string, unknown>): Record<string, unknown> {
   const result = { ...body, status: "blocked" };
-  for (const key of ["ad_groups", "banners"] as const) {
+  for (const key of ["ad_groups", "campaigns", "banners"] as const) {
     const children = body[key];
     if (Array.isArray(children)) {
       (result as Record<string, unknown>)[key] = children.map((child) => stoppedTree(asRecord(child)));
@@ -111,6 +111,10 @@ function stoppedTree(body: Record<string, unknown>): Record<string, unknown> {
 }
 
 function enforceBudgetCaps(body: Record<string, unknown>, env: NodeJS.ProcessEnv = process.env): void {
+  if (body.budget_limit !== undefined && body.budget_limit !== null &&
+      body.budget_limit_day !== undefined && body.budget_limit_day !== null) {
+    throw new Error("VK не разрешает одновременно budget_limit и budget_limit_day. Укажите только общий либо дневной бюджет.");
+  }
   enforceCap(body.budget_limit_day, env.VK_ADS_MAX_DAILY_BUDGET, "дневной бюджет");
   enforceCap(body.budget_limit, env.VK_ADS_MAX_TOTAL_BUDGET, "общий бюджет");
   for (const value of Object.values(body)) {

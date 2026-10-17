@@ -112,6 +112,17 @@ export async function readBackWrite(client: VkAdsClient, path: string, response:
     };
     const object = await client.get<Record<string, unknown>>(readPath, { fields: fields[entity] });
     if (object?.id !== Number(id)) throw new Error("Read-back returned a different object.");
+    if (collection?.[1] === "ad_plans") {
+      // GET ad_plans/{id} does not support ad_groups in fields. Read the children
+      // separately so nested creation does not return only the parent's receipt.
+      const groups = await client.getAll<Record<string, unknown>>("v2/ad_groups.json", {
+        _ad_plan_id__in: Number(id), fields: fields.ad_groups,
+      });
+      if (groups._truncated || groups.count < 1 || groups.items.length !== groups.count || groups.items.some((group) => group.ad_plan_id !== Number(id))) {
+        throw new Error("Incomplete nested group read-back.");
+      }
+      return { ...object, ad_groups: groups.items };
+    }
     if (entity === "remarketing/segments") {
       const sources = await client.get<{ items: unknown[] }>(`v2/remarketing/segments/${id}/relations.json`, { fields: "id,object_type,object_id,params" });
       return { ...object, relations: sources.items };

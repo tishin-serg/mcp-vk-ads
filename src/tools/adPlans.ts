@@ -67,9 +67,10 @@ export function registerAdPlanTools(server: McpServer, client: VkAdsClient): voi
       title: "Создать кампанию (ad_plan)",
       annotations: WRITE_CREATE,
       description:
-        "Создаёт кампанию (ad_plan). Денежные поля — в валюте аккаунта. Сложные и редкие поля передаются через `extra` (подмешиваются в тело запроса как есть).",
+        "Создаёт кампанию вместе с первыми группами: передайте непустой adGroups (JSON объектов групп с package_id/targetings/бюджетом). На проводе VK поле называется ad_groups; campaigns в ошибке VK — внутреннее имя валидатора. Пустая кампания не создаётся. В draft родитель и вложенные группы/объявления принудительно blocked. Результат проверяется GET. Денежные поля — в валюте аккаунта.",
       inputSchema: {
         name: z.string().min(1).describe("Название кампании."),
+        adGroups: z.array(z.record(z.unknown())).min(1).optional().describe("Первые группы, создаваемые вместе с кампанией. Нужен непустой массив; для совместимости допускается extra.ad_groups. Не передавайте существующие ID."),
         objective: z
           .string()
           .optional()
@@ -89,8 +90,21 @@ export function registerAdPlanTools(server: McpServer, client: VkAdsClient): voi
           .describe("Дополнительные поля кампании, подмешиваемые в тело запроса (например, priced_goal, pricelist_id)."),
       },
     },
-    async ({ name, objective, autobiddingMode, budgetLimit, budgetLimitDay, maxPrice, dateStart, dateEnd, extra }) => {
+    async ({ name, adGroups, objective, autobiddingMode, budgetLimit, budgetLimitDay, maxPrice, dateStart, dateEnd, extra }) => {
       try {
+        if (adGroups !== undefined && extra?.ad_groups !== undefined) {
+          return fail("Передайте группы только одним способом: adGroups либо extra.ad_groups.");
+        }
+        if (extra?.campaigns !== undefined) {
+          return fail("Используйте adGroups (API: ad_groups), а не внутреннее имя campaigns из ошибки VK.");
+        }
+        const groups = z.array(z.record(z.unknown())).min(1).safeParse(adGroups ?? extra?.ad_groups);
+        if (!groups.success) {
+          return fail("VK требует хотя бы одну вложенную группу при создании кампании. Передайте непустой adGroups (либо extra.ad_groups); пустой create_ad_plan не отправлен.");
+        }
+        if (groups.data.some((group) => group.id !== undefined || group.ad_plan_id !== undefined)) {
+          return fail("Первые группы должны быть новыми: не передавайте id или ad_plan_id.");
+        }
         const body = compact({
           name,
           objective,
@@ -101,6 +115,7 @@ export function registerAdPlanTools(server: McpServer, client: VkAdsClient): voi
           date_start: dateStart,
           date_end: dateEnd,
           ...extra,
+          ad_groups: groups.data,
         });
         const result = await client.post("v2/ad_plans.json", body);
         return ok(await readBackWrite(client, "v2/ad_plans.json", result));

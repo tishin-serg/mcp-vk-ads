@@ -56,6 +56,7 @@ test("raw_request runs a POST when confirmWrite is true", async () => {
       return { id: 41 };
     },
     get: async () => ({ id: 41, name: "X", status: "blocked" }),
+    getAll: async () => ({ count: 1, items: [{ id: 42, ad_plan_id: 41, status: "blocked" }] }),
   } as unknown as VkAdsClient;
 
   const raw = captureRawTool(client);

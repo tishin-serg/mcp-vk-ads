@@ -36,6 +36,13 @@ When a cap is configured, null/zero/non-numeric budgets cannot clear it. These
 are per-field limits, not an aggregate account spend cap; omitted budgets are not
 filled automatically. Draft forces nested ad_groups/banners to blocked too.
 
+create_ad_plan requires nonempty new adGroups (wire name ad_groups), with
+extra.ad_groups retained for compatibility. Empty/conflicting inputs and existing
+child IDs are rejected before POST. Parent and children are read back separately;
+missing/truncated/wrong-parent child results are not success. Draft also guards
+legacy campaigns-shaped nested payloads. Setting both total and daily budgets in
+one JSON object is rejected locally, as observed in VK's live validator.
+
 Image upload uses the existing authenticated client and native FormData. It is
 restricted to POST v2/content/static.json in full; read-only/draft reject it.
 The single upload_image tool additionally requires confirmWrite=true and bounded
