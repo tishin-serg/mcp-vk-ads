@@ -189,6 +189,15 @@ Upstream `start_login` / `finish_login` передавал `client_secret` че�
 
 ## Проверки
 
+Проверка живого read-only кабинета 2026-10-17 выявила и исправила маршрут
+статистики: диапазонная сводка берётся из v3 `/statistics/{entity}/day.json`
+(метрики через `fields`), дневные строки — из v2 `/day.json` (через `metrics`).
+Оба режима требуют даты. week/month явно не поддерживаются; параметры пагинации
+и сортировки доступны только для summary. Подробности:
+[`get_statistics`](./docs/capabilities/get-statistics.md).
+API total относится к возвращённой странице, а не ко всему кабинету; при
+autoPaginate он опускается, чтобы не выдать неполный итог за общий.
+
 CI проверяет Ubuntu Node 20/22/24 и Windows Node 22:
 
 - `npm audit --omit=dev --audit-level=high`;
