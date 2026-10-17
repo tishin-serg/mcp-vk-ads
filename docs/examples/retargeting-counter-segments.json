@@ -1,0 +1,43 @@
+[
+  {
+    "path": "v2/remarketing/segments.json",
+    "method": "POST",
+    "confirmWrite": true,
+    "body": {
+      "name": "EXAMPLE_CART_0_3_NO_PURCHASE_30",
+      "pass_condition": 2,
+      "relations": [
+        { "object_type": "remarketing_counter", "params": { "source_id": 1234567, "goal_id": "jse:addToCart", "type": "positive", "left": 3, "right": 0 } },
+        { "object_type": "remarketing_counter", "params": { "source_id": 1234567, "goal_id": "jse:purchase", "type": "negative", "left": 30, "right": 0 } }
+      ]
+    }
+  },
+  {
+    "path": "v2/remarketing/segments.json",
+    "method": "POST",
+    "confirmWrite": true,
+    "body": {
+      "name": "EXAMPLE_CART_AFTER_3_TO_15_NO_PURCHASE_30",
+      "pass_condition": 3,
+      "relations": [
+        { "object_type": "remarketing_counter", "params": { "source_id": 1234567, "goal_id": "jse:addToCart", "type": "positive", "left": 15, "right": 0 } },
+        { "object_type": "remarketing_counter", "params": { "source_id": 1234567, "goal_id": "jse:addToCart", "type": "negative", "left": 3, "right": 0 } },
+        { "object_type": "remarketing_counter", "params": { "source_id": 1234567, "goal_id": "jse:purchase", "type": "negative", "left": 30, "right": 0 } }
+      ]
+    }
+  },
+  {
+    "path": "v2/remarketing/segments.json",
+    "method": "POST",
+    "confirmWrite": true,
+    "body": {
+      "name": "EXAMPLE_CART_AFTER_15_TO_30_NO_PURCHASE_30",
+      "pass_condition": 3,
+      "relations": [
+        { "object_type": "remarketing_counter", "params": { "source_id": 1234567, "goal_id": "jse:addToCart", "type": "positive", "left": 30, "right": 0 } },
+        { "object_type": "remarketing_counter", "params": { "source_id": 1234567, "goal_id": "jse:addToCart", "type": "negative", "left": 15, "right": 0 } },
+        { "object_type": "remarketing_counter", "params": { "source_id": 1234567, "goal_id": "jse:purchase", "type": "negative", "left": 30, "right": 0 } }
+      ]
+    }
+  }
+]
