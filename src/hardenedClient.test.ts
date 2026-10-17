@@ -117,3 +117,20 @@ test("budget caps apply even in full mode", async () => {
     },
   );
 });
+
+test("nested JSON creates cannot bypass caps or create active children in draft", async () => {
+  await withEnv({ VK_ADS_WRITE_MODE: "draft", VK_ADS_MAX_DAILY_BUDGET: "100" }, async () => {
+    await withRecordingFetch(async (bodies) => {
+      const client = new HardenedVkAdsClient(config);
+      for (const budget of [101, null, 0, -1, "unlimited", true]) {
+        await assert.rejects(client.post("v2/ad_plans.json", { name: "X", ad_groups: [{ budget_limit_day: budget }] }), /отклонена/);
+      }
+      assert.equal(bodies.length, 0);
+      await client.post("v2/ad_plans.json", { status: "active", ad_groups: [{ status: "active", budget_limit_day: 50, banners: [{ status: "active" }] }] });
+      const body = bodies[0] as { status: string; ad_groups: { status: string; banners: { status: string }[] }[] };
+      assert.equal(body.status, "blocked");
+      assert.equal(body.ad_groups[0].status, "blocked");
+      assert.equal(body.ad_groups[0].banners[0].status, "blocked");
+    });
+  });
+});

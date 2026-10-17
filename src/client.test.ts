@@ -17,7 +17,7 @@ test("REST refuses redirects for reads and writes without retrying writes", asyn
   try {
     const client = makeClient({ maxRetries: 0 });
     await assert.rejects(client.get("v3/user.json"), /redirect rejected/);
-    await assert.rejects(client.post("v2/ad_plans.json", { status: "blocked" }), /redirect rejected/);
+    await assert.rejects(client.post("v2/ad_plans.json", { status: "blocked" }), /Не повторяйте.*GET/);
     assert.equal(mock.calls.length, 2);
   } finally {
     mock.restore();
@@ -294,7 +294,7 @@ test("request() retries a network error on a GET, then gives up on a POST", asyn
   });
   try {
     // A non-GET network error is not retried (the write may have landed).
-    await assert.rejects(() => makeClient().post("v2/ad_plans.json", { name: "X" }), /ECONNRESET/);
+    await assert.rejects(() => makeClient().post("v2/ad_plans.json", { name: "X" }), /Результат записи неизвестен.*GET/);
     assert.equal(calls, 1);
   } finally {
     mock2.restore();

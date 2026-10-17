@@ -31,6 +31,23 @@ Optional hard limits:
 
 Requests above a configured cap are rejected before reaching VK Ads.
 
+Caps are checked recursively in JSON, including nested objects and bulk items.
+When a cap is configured, null/zero/non-numeric budgets cannot clear it. These
+are per-field limits, not an aggregate account spend cap; omitted budgets are not
+filled automatically. Draft forces nested ad_groups/banners to blocked too.
+
+Image upload uses the existing authenticated client and native FormData. It is
+restricted to POST v2/content/static.json in full; read-only/draft reject it.
+The single upload_image tool additionally requires confirmWrite=true and bounded
+JPEG/PNG base64 input. It cannot read arbitrary local paths or fetch remote URLs.
+No API host or auth headers are accepted as tool arguments.
+
+Typed writes and raw POST to the known advertising/segment resources read back
+the object. A failed read-back explicitly warns that the write was accepted:
+do not repeat it. Unknown raw endpoints return the provider response and require
+an explicit subsequent GET if that response is only an ID/receipt. Network/5xx
+mutation failures do not retry and require reconciliation via GET.
+
 ## Authentication boundary
 
 The upstream in-chat OAuth flow is disabled. `finish_login` accepts no credentials.

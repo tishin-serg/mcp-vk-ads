@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { VkAdsClient } from "../client.js";
-import { ACTION_TO_STATUS, compact, csv, fail, isoDate, ok, READ_ONLY, setStatusForIds, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
+import { ACTION_TO_STATUS, compact, csv, fail, isoDate, ok, readBackWrite, READ_ONLY, setStatusForIds, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
 
 const DEFAULT_FIELDS = [
   "id",
@@ -111,7 +111,7 @@ export function registerAdGroupTools(server: McpServer, client: VkAdsClient): vo
           ...args.extra,
         });
         const result = await client.post("v2/ad_groups.json", body);
-        return ok(result);
+        return ok(await readBackWrite(client, "v2/ad_groups.json", result));
       } catch (e) {
         return fail(e);
       }
@@ -151,7 +151,7 @@ export function registerAdGroupTools(server: McpServer, client: VkAdsClient): vo
           return fail("Нужно передать хотя бы одно поле для изменения.");
         }
         const result = await client.post(`v2/ad_groups/${id}.json`, body);
-        return ok(result);
+        return ok(await readBackWrite(client, `v2/ad_groups/${id}.json`, result));
       } catch (e) {
         return fail(e);
       }

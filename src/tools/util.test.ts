@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { VkAdsClient } from "../client.js";
-import { ACTION_TO_STATUS, compact, csv, fail, ok, setStatusForIds } from "./util.js";
+import { ACTION_TO_STATUS, compact, csv, fail, ok, readBackWrite, setStatusForIds } from "./util.js";
 
 function text(result: CallToolResult): string {
   return (result.content[0] as { text: string }).text;
@@ -46,6 +46,7 @@ test("fail marks the result as an error and keeps the message", () => {
 test("setStatusForIds posts the status per id and reports success", async () => {
   const calls: Array<[string, unknown]> = [];
   const client = {
+    get: async (path: string) => ({ id: Number(path.match(/\/(\d+)\.json$/)?.[1]), status: "blocked" }),
     post: async (path: string, body: unknown) => {
       calls.push([path, body]);
       return {};
@@ -55,6 +56,7 @@ test("setStatusForIds posts the status per id and reports success", async () => 
   const result = await setStatusForIds(client, "ad_plans", [1, 2], "blocked");
 
   assert.equal(result.isError, undefined);
+  assert.equal(JSON.parse(text(result))[0].object.status, "blocked");
   assert.deepEqual(calls, [
     ["v2/ad_plans/1.json", { status: "blocked" }],
     ["v2/ad_plans/2.json", { status: "blocked" }],
@@ -63,6 +65,7 @@ test("setStatusForIds posts the status per id and reports success", async () => 
 
 test("setStatusForIds flags partial failures as an error", async () => {
   const client = {
+    get: async (path: string) => ({ id: Number(path.match(/\/(\d+)\.json$/)?.[1]), status: "blocked" }),
     post: async (path: string) => {
       if (path.includes("/2.json")) throw new Error("nope");
       return {};
@@ -73,4 +76,28 @@ test("setStatusForIds flags partial failures as an error", async () => {
 
   assert.equal(result.isError, true);
   assert.match(text(result), /Не удалось изменить статус \(1 из 3\)/);
+});
+
+test("read-back failure explicitly prevents retrying an accepted write", async () => {
+  let reads = 0;
+  const client = { get: async () => { reads++; throw new Error("temporary failure"); } } as unknown as VkAdsClient;
+  await assert.rejects(readBackWrite(client, "v2/ad_groups/1.json", null), /Запись принята.*GET.*Не повторяйте/);
+  assert.equal(reads, 1);
+  await assert.rejects(readBackWrite(client, "v2/ad_groups.json", {}), /не содержит ID/);
+  assert.equal(reads, 1);
+});
+
+test("segment read-back requests complete relation params without expanding nested segments", async () => {
+  const paths: string[] = [];
+  const client = { get: async (path: string, query: { fields: string }) => {
+    paths.push(path);
+    if (path.endsWith("/relations.json")) {
+      assert.match(query.fields, /params/);
+      return { items: [{ object_type: "remarketing_counter", params: { left: 3, right: 0 } }] };
+    }
+    return { id: 2, pass_condition: 1 };
+  } } as unknown as VkAdsClient;
+  const result = await readBackWrite(client, "v2/remarketing/segments.json", { id: 2 }) as { relations: unknown[] };
+  assert.equal(result.relations.length, 1);
+  assert.deepEqual(paths, ["v2/remarketing/segments/2.json", "v2/remarketing/segments/2/relations.json"]);
 });
