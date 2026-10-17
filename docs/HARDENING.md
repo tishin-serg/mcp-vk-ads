@@ -127,6 +127,13 @@ Upstream marketplace/plugin manifests were removed because they launched the pub
 
 ## CI platforms
 
+VK API errors include HTTP status, provider code/message and bounded nested
+validation fields, even when the provider returns the generic "Validation failed".
+Credential keys, request/header/value echoes and the actual bearer token are
+redacted or omitted from the diagnostic message and retained error body. No
+request headers or complete raw response bodies are logged. Diagnostics do not
+change write confirmation, caps, origin pinning or the no-replay policy.
+
 The main test matrix covers:
 
 - Ubuntu / Node 20;

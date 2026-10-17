@@ -5,14 +5,34 @@ import { HardenedVkAdsClient } from "../hardenedClient.js";
 import { registerAdPlanTools } from "./adPlans.js";
 import { registerAdGroupTools } from "./adGroups.js";
 import { registerBannerTools } from "./banners.js";
+import { registerRawTool } from "./raw.js";
+import { VkAdsError } from "../types.js";
 
 type Handler = (args: Record<string, unknown>) => Promise<{ content: { text: string }[]; isError?: boolean }>;
 function tools(client: VkAdsClient) {
   const handlers: Record<string, Handler> = {};
   const server = { registerTool: (name: string, _config: unknown, handler: Handler) => { handlers[name] = handler; } };
-  for (const register of [registerAdPlanTools, registerAdGroupTools, registerBannerTools]) register(server as never, client);
+  for (const register of [registerAdPlanTools, registerAdGroupTools, registerBannerTools, registerRawTool]) register(server as never, client);
   return handlers;
 }
+
+test("plan/group/banner/raw errors expose safe validation fields without retry", async () => {
+  let calls = 0;
+  const error = new VkAdsError(400, { error: { code: "validation_failed", message: "Validation failed", fields: { priced_goal: { name: { code: "required", message: "Goal required" } } } } });
+  const reject = async () => { calls++; throw error; };
+  const handlers = tools({ post: reject, request: reject } as unknown as VkAdsClient);
+  for (const [name, args] of [
+    ["create_ad_plan", { name: "X", adGroups: [{ package_id: 1 }] }],
+    ["create_ad_group", { adPlanId: 1, name: "X", packageId: 1 }],
+    ["create_banner", { adGroupId: 1 }],
+    ["raw_request", { path: "v2/ad_plans.json", method: "POST", body: {}, confirmWrite: true }],
+  ] as const) {
+    const result = await handlers[name](args);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /HTTP 400.*validation_failed.*priced_goal.*Goal required/);
+  }
+  assert.equal(calls, 4);
+});
 
 test("typed create/update tools return fetched objects and banner creation uses its parent endpoint", async () => {
   const posts: Array<{ path: string; body: unknown }> = [];

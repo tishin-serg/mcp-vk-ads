@@ -26,7 +26,7 @@ test("REST refuses redirects for reads and writes without retrying writes", asyn
 
 function makeClient(overrides: Partial<ConstructorParameters<typeof VkAdsClient>[0]> = {}) {
   return new VkAdsClient({
-    token: "T",
+    token: "TEST_ACCESS_TOKEN",
     lang: "ru",
     apiBase: BASE,
     retryBaseMs: 0,
@@ -65,7 +65,7 @@ test("get() hits the versioned path, sends the bearer token and parses JSON", as
     assert.equal(mock.calls[0].init.redirect, "error");
 
     const headers = mock.calls[0].init.headers as Record<string, string>;
-    assert.equal(headers.Authorization, "Bearer T");
+    assert.equal(headers.Authorization, "Bearer TEST_ACCESS_TOKEN");
     assert.equal(headers["Accept-Language"], "ru");
   } finally {
     mock.restore();
@@ -131,6 +131,20 @@ test("request() formats an OAuth-style error body", async () => {
   } finally {
     mock.restore();
   }
+});
+
+test("request() retains validation fields but redacts an echoed bearer token", async () => {
+  const mock = mockFetch(() => Response.json({ error: { code: "validation_failed", message: "Invalid echoed-live-token", fields: { package_id: { code: "invalid", message: "Not available" } } } }, { status: 400 }));
+  try {
+    const client = new VkAdsClient({ token: "echoed-live-token", apiBase: "https://ads.vk.com/api", lang: "ru" });
+    await assert.rejects(client.post("v2/ad_plans.json", {}), (err: unknown) => {
+      assert.ok(err instanceof VkAdsError);
+      assert.match(err.message, /package_id.*Not available/);
+      assert.equal(JSON.stringify({ message: err.message, body: err.body }).includes("echoed-live-token"), false);
+      return true;
+    });
+    assert.equal(mock.calls.length, 1);
+  } finally { mock.restore(); }
 });
 
 test("getAll() pages at MAX_PAGE_LIMIT, merges items and carries `total`", async () => {

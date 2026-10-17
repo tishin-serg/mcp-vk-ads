@@ -135,13 +135,15 @@ export class VkAdsClient {
     for (let attempt = 0; ; attempt++) {
       let res: Response;
       let text: string;
+      let requestHeaders: Record<string, string> = {};
       try {
+        requestHeaders = await this.headers(hasBody && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : undefined);
         ({ res, text } = await this.fetchWithTimeout(
           url,
           {
             method,
             // Native fetch owns the multipart boundary; never set Content-Type for FormData.
-            headers: await this.headers(hasBody && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : undefined),
+            headers: requestHeaders,
             body: hasBody ? (opts.body instanceof FormData ? opts.body : JSON.stringify(opts.body)) : undefined,
           },
           path,
@@ -209,7 +211,7 @@ export class VkAdsClient {
         if (!idempotent && res.status >= 500) {
           throw new Error(`HTTP ${res.status}: результат записи неизвестен. Не повторяйте POST/DELETE вслепую: сначала проверьте объект через GET.`);
         }
-        throw new VkAdsError(res.status, data);
+        throw new VkAdsError(res.status, data, [requestHeaders.Authorization?.replace(/^Bearer /, "") ?? ""]);
       }
       return data as T;
     }
