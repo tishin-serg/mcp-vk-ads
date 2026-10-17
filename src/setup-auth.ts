@@ -18,6 +18,10 @@ async function main(): Promise<void> {
   );
 
   const expectedManagerId = process.env.VK_ADS_EXPECTED_MANAGER_ID;
+  const method = process.argv.slice(2);
+  if (method.some(arg => arg !== "--access-token") || method.length > 1) {
+    throw new Error("Допустим только несекретный флаг --access-token. Секреты вводятся исключительно в локальный prompt.");
+  }
   if (expectedManagerId && (!/^\d+$/.test(expectedManagerId) || !Number.isSafeInteger(Number(expectedManagerId)))) {
     throw new Error("Некорректный expected manager ID.");
   }
@@ -32,6 +36,7 @@ async function main(): Promise<void> {
   }, {
     expectedManagerId: expectedManagerId ? Number(expectedManagerId) : undefined,
     expectedAgencyClientName: process.env.VK_ADS_EXPECTED_AGENCY_CLIENT_NAME,
+    authMethod: method.includes("--access-token") ? "access-token" : "oauth",
   });
 }
 

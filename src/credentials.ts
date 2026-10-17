@@ -7,8 +7,10 @@ import { validateAuthTarget, type AuthTarget } from "./authTarget.js";
 const APP = "mcp-vk-ads";
 
 export interface StoredCredentials {
-  client_id: string;
-  client_secret: string;
+  /** Missing marker means legacy OAuth credentials. Imported tokens never carry app secrets. */
+  authMethod?: "oauth" | "access-token";
+  client_id?: string;
+  client_secret?: string;
   access_token: string;
   refresh_token?: string;
   expires_at?: number;
@@ -95,18 +97,21 @@ function parseCredentials(raw: string): StoredCredentials | undefined {
   try {
     const parsed = JSON.parse(raw) as Partial<StoredCredentials>;
     if (
-      typeof parsed.client_id !== "string" ||
-      parsed.client_id === "" ||
-      typeof parsed.client_secret !== "string" ||
-      parsed.client_secret === "" ||
       typeof parsed.access_token !== "string" ||
       parsed.access_token === "" ||
-      typeof parsed.obtained_at !== "number"
+      typeof parsed.obtained_at !== "number" || !Number.isFinite(parsed.obtained_at) ||
+      (parsed.expires_at !== undefined && (typeof parsed.expires_at !== "number" || !Number.isFinite(parsed.expires_at)))
     ) {
       return undefined;
     }
     if (parsed.target !== undefined) parsed.target = validateAuthTarget(parsed.target);
     if (parsed.target?.type === "agency-client" && parsed.username !== parsed.target.agencyClientName) return undefined;
+    if (parsed.authMethod === "access-token") {
+      if (parsed.client_id !== undefined || parsed.client_secret !== undefined || parsed.refresh_token !== undefined ||
+          parsed.target?.type !== "agency-client" || parsed.target.userId === undefined) return undefined;
+    } else if ((parsed.authMethod !== undefined && parsed.authMethod !== "oauth") ||
+        typeof parsed.client_id !== "string" || !parsed.client_id ||
+        typeof parsed.client_secret !== "string" || !parsed.client_secret) return undefined;
     return parsed as StoredCredentials;
   } catch {
     return undefined;

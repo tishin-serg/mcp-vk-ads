@@ -41,6 +41,20 @@ On Windows, persistent credentials are created only by the local interactive com
 npm run auth:setup
 ```
 
+The alternate local `npm run auth:token` command accepts a ready agency-client
+access token through the same hidden TTY prompt. It performs only a pinned,
+redirect-refusing `GET v3/user.json` and verifies the explicitly selected login
+before writing a DPAPI envelope. It makes no OAuth POST or advertising mutation.
+The payload records `authMethod=access-token`, the verified login/user ID, and
+the token; it contains no invented client ID, app secret or refresh token.
+Imported credentials must have a verified agency target and cannot carry OAuth
+credentials. Missing/unknown auth markers cannot bypass legacy OAuth validation.
+
+For a ready token the expiry is unknown and refresh is unavailable. HTTP 401
+returns a fixed local-reimport instruction without echoing provider bodies or
+attempting OAuth. Import errors show only safe stage/status information. Existing
+own/agency OAuth authentication and refresh remain supported separately.
+
 The command:
 
 1. reads `client_id` and a hidden `client_secret` from the local TTY;

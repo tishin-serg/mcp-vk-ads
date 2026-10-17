@@ -195,6 +195,12 @@ export class VkAdsClient {
         }
       }
 
+      if (!res.ok && res.status === 401 && this.tokens.status().authMethod === "access-token") {
+        throw new AuthRequiredError(
+          "VK отклонил готовый токен (HTTP 401): он истёк или отозван. " +
+          "Автоматического refresh нет. Получите новый у выдавшей стороны и запустите npm run auth:token локально.",
+        );
+      }
       if (!res.ok) throw new VkAdsError(res.status, data);
       return data as T;
     }

@@ -1,6 +1,6 @@
 import { TokenStore } from "./auth.js";
 import { mintToken } from "./oauth.js";
-import { listManagerClients, verifyTokenAccount, type ManagerClient } from "./accountVerification.js";
+import { AccountMismatchError, listManagerClients, verifyTokenAccount, type ManagerClient } from "./accountVerification.js";
 import type { AuthTarget } from "./authTarget.js";
 
 export interface SetupIO {
@@ -13,9 +13,30 @@ export interface SetupOptions {
   fetchImpl?: typeof fetch;
   expectedManagerId?: number;
   expectedAgencyClientName?: string;
+  authMethod?: "oauth" | "access-token";
 }
 
 export async function runLocalSetup(io: SetupIO, options: SetupOptions = {}): Promise<void> {
+  if (options.authMethod === "access-token") {
+    const username = options.expectedAgencyClientName ?? (await io.ask("Agency client username/login: ")).trim();
+    if (!username) throw new Error("Укажите ожидаемый login клиента до ввода токена.");
+    io.write(`Готовый токен: проверяем только клиента ${username}.\n`);
+    const accessToken = (await io.readSecret("access_token (скрытый ввод, без Bearer): ")).trim();
+    const tokens = new TokenStore(undefined, { fetchImpl: options.fetchImpl });
+    try {
+      const credentials = await tokens.importAccessToken({ accessToken, target: { type: "agency-client", agencyClientName: username } });
+      io.write(`\nПодключение проверено.\nVK Ads user: ${credentials.username}\nClient user ID: ${credentials.target?.type === "agency-client" ? credentials.target.userId : ""}\n`);
+      io.write(`Credentials: ${tokens.status().path} (DPAPI CurrentUser)\n`);
+      io.write("Срок действия неизвестен. Автоматического refresh нет; новый токен предоставляет выдавшая сторона.\n");
+    } catch (error) {
+      // Never print provider bodies or errors that could reflect the pasted token.
+      const http = error instanceof Error ? /^VK auth verification GET: HTTP (\d{3})\.$/.exec(error.message) : null;
+      const reason = error instanceof AccountMismatchError ? "API вернул другой кабинет или не подтвердил его ID/login."
+        : http ? `VK API: HTTP ${http[1]}.` : "Ошибка сети, redirect, формата ответа или защищённого сохранения.";
+      throw new Error(`${reason} Новый токен не сохранён; старое подключение не изменено.`);
+    }
+    return;
+  }
   io.write("Account type:\n1. Own / manager account\n2. Agency / manager client\n");
   // A local expected username is an explicit operator choice, never an AI default.
   const choice = options.expectedAgencyClientName ? "2" : (await io.ask("Выбор [1]: ")).trim() || "1";

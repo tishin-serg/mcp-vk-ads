@@ -47,7 +47,7 @@ export function registerAuthTools(
         mode: "windows-local-dpapi",
         steps: [
           "На Windows откройте PowerShell/Windows Terminal в локальной папке hardened MCP.",
-          "Выполните `npm run auth:setup` и введите client_id и client_secret только в локальном терминале.",
+          "Для OAuth выполните `npm run auth:setup`; для готового токена клиента — `npm run auth:token`. Секреты вводите только в локальном терминале.",
           "Команда проверит кабинет VK Ads и сохранит credentials через Windows DPAPI CurrentUser.",
           "Перезапустите MCP и вызовите auth_status для проверки подключения.",
         ],

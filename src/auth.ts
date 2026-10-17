@@ -28,6 +28,8 @@ export type TokenSource = "env" | "stored";
 
 export interface AuthStatus {
   configured: boolean;
+  authMethod?: "oauth" | "access-token";
+  expiresAtKnown?: boolean;
   source?: TokenSource;
   /** ISO date the stored access token expires; absent for env tokens. */
   expiresAt?: string;
@@ -47,6 +49,7 @@ export const NOT_CONNECTED_MESSAGE =
   "Это не сбой сети — повторный вызов не поможет. " +
   "На Windows запустите локально `npm run auth:setup` в папке hardened MCP: " +
   "команда сама получит токен и сохранит credentials через DPAPI CurrentUser. " +
+  "Для готового клиентского токена используйте npm run auth:token со скрытым локальным вводом. " +
   "Не передавайте client_secret или access token через AI-чат. " +
   "Для временных/CI-сценариев можно локально задать VK_ADS_TOKEN.";
 
@@ -126,9 +129,32 @@ export class TokenStore {
     return this.save(response, { ...params, target: boundTarget, username: user.username });
   }
 
+  /** Local-only import: one GET, no OAuth request or guessed refresh credentials. */
+  async importAccessToken(params: {
+    accessToken: string;
+    target: Extract<AuthTarget, { type: "agency-client" }>;
+  }): Promise<StoredCredentials> {
+    const target = validateAuthTarget(params.target);
+    if (target.type !== "agency-client") throw new Error("Для импорта требуется явный agency client target.");
+    if (typeof params.accessToken !== "string" || !params.accessToken || /\s|[\u0000-\u001f\u007f]/.test(params.accessToken)) {
+      throw new Error("Введите только токен без Bearer, кавычек и пробелов.");
+    }
+    const user = await verifyTokenAccount(params.accessToken, target, { apiBase: this.apiBase, fetchImpl: this.fetchImpl });
+    const credentials: StoredCredentials = {
+      authMethod: "access-token", access_token: params.accessToken,
+      obtained_at: Date.now(), username: user.username,
+      target: { ...target, userId: user.id },
+    };
+    writeCredentials(credentials);
+    return credentials;
+  }
+
   /** Re-mints the access token from protected stored refresh credentials. */
   async refresh(): Promise<StoredCredentials> {
     const stored = readCredentials();
+    if (stored?.authMethod === "access-token") {
+      throw new AuthRequiredError("Готовый токен не продлевается автоматически. Получите новый у выдавшей стороны и выполните npm run auth:token локально.");
+    }
     if (!stored?.refresh_token || !stored.client_id || !stored.client_secret) {
       throw new AuthRequiredError(
         "Нет сохранённых данных для обновления токена VK Рекламы. " +
@@ -167,7 +193,7 @@ export class TokenStore {
   /** True when a stored refresh is possible — i.e. a retry after 401 is worth trying. */
   canRefresh(): boolean {
     const stored = this.envToken ? undefined : readCredentials();
-    return Boolean(stored?.refresh_token && stored.client_id && stored.client_secret);
+    return Boolean(stored?.authMethod !== "access-token" && stored?.refresh_token && stored.client_id && stored.client_secret);
   }
 
   /** Persists a token response; returns what was stored (never logged). */
@@ -217,6 +243,8 @@ export class TokenStore {
     return {
       configured: true,
       source: "stored",
+      authMethod: stored.authMethod ?? "oauth",
+      expiresAtKnown: stored.expires_at !== undefined,
       expiresAt: stored.expires_at ? new Date(stored.expires_at).toISOString() : undefined,
       obtainedAt: new Date(stored.obtained_at).toISOString(),
       canRefresh: Boolean(stored.refresh_token && stored.client_id && stored.client_secret),
