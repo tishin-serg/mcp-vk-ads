@@ -6,6 +6,7 @@ import { registerAdGroupTools } from "./adGroups.js";
 import { registerBannerTools } from "./banners.js";
 import { registerStatisticsTools } from "./statistics.js";
 import { registerRawTool } from "./raw.js";
+import { registerMediaTool } from "./media.js";
 
 interface Annotations {
   readOnlyHint?: boolean;
@@ -29,6 +30,7 @@ function collectAnnotations(): Record<string, Annotations | undefined> {
     registerBannerTools,
     registerStatisticsTools,
     registerRawTool,
+    registerMediaTool,
   ];
   for (const register of registrars) register(server as any, {} as any);
   return annotations;
@@ -77,7 +79,7 @@ test("update tools are idempotent, non-destructive writes", () => {
 });
 
 test("create tools are non-destructive, non-idempotent writes", () => {
-  const creates = ["create_ad_plan", "create_ad_group", "create_banner"];
+  const creates = ["create_ad_plan", "create_ad_group", "create_banner", "upload_image"];
   for (const name of creates) {
     assert.equal(ANN[name]?.readOnlyHint, false, `${name} should not be readOnly`);
     assert.equal(ANN[name]?.destructiveHint, false, `${name} should not be destructive`);

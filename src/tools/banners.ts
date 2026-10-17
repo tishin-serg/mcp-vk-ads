@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { VkAdsClient } from "../client.js";
-import { ACTION_TO_STATUS, compact, csv, fail, ok, READ_ONLY, setStatusForIds, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
+import { ACTION_TO_STATUS, compact, csv, fail, ok, readBackWrite, READ_ONLY, setStatusForIds, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
 
 const DEFAULT_FIELDS = [
   "id",
@@ -70,7 +70,7 @@ export function registerBannerTools(server: McpServer, client: VkAdsClient): voi
       title: "Создать объявление (banner)",
       annotations: WRITE_CREATE,
       description:
-        "Создаёт объявление внутри группы объявлений. Креатив ссылается на загруженные медиа через `content`, тексты объявления — в `textblocks`, ссылки — в `urls`. Эти структуры отправляются как есть; точная форма для каждого формата объявления — в документации VK Рекламы.",
+        "Создаёт объявление через ad_groups/{adGroupId}/banners.json и читает фактический объект GET. content.<slot>={id} ссылается на существующее медиа или результат upload_image; urls.<slot>={id} — на URL ID. Слоты/textblocks сверять с package/banner pattern. При неуспешном проверочном GET запись не повторять вслепую.",
       inputSchema: {
         adGroupId: z.number().int().describe("Id родительской группы объявлений."),
         name: z.string().min(1).optional().describe("Название объявления."),
@@ -86,15 +86,15 @@ export function registerBannerTools(server: McpServer, client: VkAdsClient): voi
     async ({ adGroupId, name, textblocks, urls, content, extra }) => {
       try {
         const body = compact({
-          ad_group_id: adGroupId,
           name,
           textblocks,
           urls,
           content,
           ...extra,
         });
-        const result = await client.post("v2/banners.json", body);
-        return ok(result);
+        const path = `v2/ad_groups/${adGroupId}/banners.json`;
+        const result = await client.post(path, body);
+        return ok(await readBackWrite(client, path, result));
       } catch (e) {
         return fail(e);
       }
@@ -123,7 +123,7 @@ export function registerBannerTools(server: McpServer, client: VkAdsClient): voi
           return fail("Нужно передать хотя бы одно поле для изменения.");
         }
         const result = await client.post(`v2/banners/${id}.json`, body);
-        return ok(result);
+        return ok(await readBackWrite(client, `v2/banners/${id}.json`, result));
       } catch (e) {
         return fail(e);
       }

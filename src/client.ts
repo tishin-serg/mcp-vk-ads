@@ -140,8 +140,9 @@ export class VkAdsClient {
           url,
           {
             method,
-            headers: await this.headers(hasBody ? { "Content-Type": "application/json" } : undefined),
-            body: hasBody ? JSON.stringify(opts.body) : undefined,
+            // Native fetch owns the multipart boundary; never set Content-Type for FormData.
+            headers: await this.headers(hasBody && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : undefined),
+            body: hasBody ? (opts.body instanceof FormData ? opts.body : JSON.stringify(opts.body)) : undefined,
           },
           path,
         ));
@@ -155,6 +156,9 @@ export class VkAdsClient {
         if (idempotent && attempt < this.maxRetries) {
           await delay(this.backoffMs(attempt));
           continue;
+        }
+        if (!idempotent) {
+          throw new Error("Результат записи неизвестен после сетевой ошибки/таймаута. Не повторяйте POST/DELETE вслепую: сначала проверьте объект через GET.");
         }
         throw err;
       }
@@ -201,7 +205,12 @@ export class VkAdsClient {
           "Автоматического refresh нет. Получите новый у выдавшей стороны и запустите npm run auth:token локально.",
         );
       }
-      if (!res.ok) throw new VkAdsError(res.status, data);
+      if (!res.ok) {
+        if (!idempotent && res.status >= 500) {
+          throw new Error(`HTTP ${res.status}: результат записи неизвестен. Не повторяйте POST/DELETE вслепую: сначала проверьте объект через GET.`);
+        }
+        throw new VkAdsError(res.status, data);
+      }
       return data as T;
     }
   }

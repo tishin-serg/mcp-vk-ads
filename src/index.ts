@@ -23,6 +23,7 @@ import { registerAdGroupTools } from "./tools/adGroups.js";
 import { registerBannerTools } from "./tools/banners.js";
 import { registerStatisticsTools } from "./tools/statistics.js";
 import { registerRawTool } from "./tools/raw.js";
+import { registerMediaTool } from "./tools/media.js";
 
 export const INSTRUCTIONS =
   "VK Реклама (VK Ads) — API рекламного кабинета на ads.vk.com. Объекты вложены: " +
@@ -91,6 +92,7 @@ async function main(): Promise<void> {
   registerBannerTools(server, client);
   registerStatisticsTools(server, client);
   registerRawTool(server, client);
+  registerMediaTool(server, client);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

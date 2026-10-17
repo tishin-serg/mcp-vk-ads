@@ -85,6 +85,54 @@ export const ACTION_TO_STATUS = {
 
 export type EntityAction = keyof typeof ACTION_TO_STATUS;
 
+/** Verify the resources used by the retargeting workflow, without replaying a write. */
+export async function readBackWrite(client: VkAdsClient, path: string, response: unknown): Promise<unknown> {
+  const normalized = path.replace(/^\//, "");
+  const item = /^v2\/(ad_plans|ad_groups|banners|remarketing\/segments)\/(\d+)\.json$/.exec(normalized);
+  const collection = /^v2\/(ad_plans|ad_groups|remarketing\/segments)\.json$/.exec(normalized);
+  const bannerCreate = /^v2\/ad_groups\/\d+\/banners\.json$/.test(normalized);
+  const relations = /^v2\/remarketing\/segments\/\d+\/relations(?:\/\d+)?\.json$/.test(normalized);
+  if (!item && !collection && !bannerCreate && !relations) return response;
+  const id = item ? Number(item[2]) : (response as { id?: unknown } | null)?.id;
+  const entity = item?.[1] ?? collection?.[1] ?? "banners";
+  let readPath = relations ? normalized.replace(/\/relations\/\d+\.json$/, "/relations.json") : "";
+  if (!relations) {
+    if (!Number.isSafeInteger(id) || Number(id) <= 0) {
+      throw new Error("Запись принята VK, но ответ не содержит ID для проверки. Не повторяйте запись: сначала найдите объект через GET списка.");
+    }
+    readPath = `v2/${entity}/${id}.json`;
+  }
+  try {
+    if (relations) return await client.get(readPath, { fields: "id,object_type,object_id,params" });
+    const fields: Record<string, string> = {
+      ad_plans: "id,name,status,budget_limit,budget_limit_day,date_start,date_end",
+      ad_groups: "id,name,status,ad_plan_id,package_id,targetings,pricelist_id,budget_limit,budget_limit_day,utm,enable_utm",
+      banners: "id,name,status,ad_group_id,content,textblocks,urls",
+      "remarketing/segments": "id,name,pass_condition,relations_count",
+    };
+    const object = await client.get<Record<string, unknown>>(readPath, { fields: fields[entity] });
+    if (object?.id !== Number(id)) throw new Error("Read-back returned a different object.");
+    if (collection?.[1] === "ad_plans") {
+      // GET ad_plans/{id} does not support ad_groups in fields. Read the children
+      // separately so nested creation does not return only the parent's receipt.
+      const groups = await client.getAll<Record<string, unknown>>("v2/ad_groups.json", {
+        _ad_plan_id__in: Number(id), fields: fields.ad_groups,
+      });
+      if (groups._truncated || groups.count < 1 || groups.items.length !== groups.count || groups.items.some((group) => group.ad_plan_id !== Number(id))) {
+        throw new Error("Incomplete nested group read-back.");
+      }
+      return { ...object, ad_groups: groups.items };
+    }
+    if (entity === "remarketing/segments") {
+      const sources = await client.get<{ items: unknown[] }>(`v2/remarketing/segments/${id}/relations.json`, { fields: "id,object_type,object_id,params" });
+      return { ...object, relations: sources.items };
+    }
+    return object;
+  } catch {
+    throw new Error(`Запись принята VK, но проверочный GET ${readPath} не выполнен. Не повторяйте запись: выполните этот GET отдельно.`);
+  }
+}
+
 /**
  * Applies a status change to many objects of one entity. VK Ads mutates a
  * single object per POST to `{entity}/{id}.json`, so this loops and reports a
@@ -96,12 +144,14 @@ export async function setStatusForIds(
   ids: number[],
   status: string,
 ): Promise<CallToolResult> {
-  const results: Array<{ id: number; ok: boolean; error?: string }> = [];
+  const results: Array<{ id: number; ok: boolean; object?: unknown; error?: string }> = [];
   let failed = 0;
   for (const id of ids) {
     try {
-      await client.post(`v2/${entity}/${id}.json`, { status });
-      results.push({ id, ok: true });
+      const path = `v2/${entity}/${id}.json`;
+      const response = await client.post(path, { status });
+      const object = await readBackWrite(client, path, response);
+      results.push({ id, ok: true, object });
     } catch (e) {
       failed++;
       results.push({ id, ok: false, error: e instanceof Error ? e.message : String(e) });

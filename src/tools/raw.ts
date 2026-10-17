@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { HttpMethod } from "../client.js";
 import type { VkAdsClient } from "../client.js";
-import { fail, ok, WRITE_DELETE } from "./util.js";
+import { fail, ok, readBackWrite, WRITE_DELETE } from "./util.js";
 
 /** Only GET reads data; POST and DELETE mutate the account. */
 export function isReadMethod(method: string): boolean {
@@ -17,7 +17,7 @@ export function registerRawTool(server: McpServer, client: VkAdsClient): void {
       // Escape hatch: can POST/DELETE, so flag it destructive.
       annotations: WRITE_DELETE,
       description:
-        'Универсальный запрос напрямую к любому эндпоинту API VK Рекламы (например, path "v2/ad_plans.json", method GET). Нужен для эндпоинтов, у которых нет отдельного инструмента. `query` уходит в строку запроса, `body` отправляется как JSON для POST. GET выполняется свободно; POST и DELETE — запись, для них нужен confirmWrite=true.',
+        'JSON-запрос к API VK Ads: сегменты v2/remarketing/segments.json и /{id}/relations.json (fields=id,object_type,object_id,params), counters, pricelists, packages/packages_pads. GET без confirmWrite; POST/DELETE требуют confirmWrite=true и разрешённого write mode. Body — JSON-объект, query — скаляры, пагинация limit/offset вручную. Известные рекламные объекты и сегменты после POST читаются через GET; другие endpoints возвращают исходный ответ VK (проверить объект отдельно). При неопределённом write не повторять create вслепую. Для multipart используйте upload_image.',
       inputSchema: {
         path: z
           .string()
@@ -44,7 +44,7 @@ export function registerRawTool(server: McpServer, client: VkAdsClient): void {
           );
         }
         const result = await client.request(m, path, { query, body });
-        return ok(result);
+        return ok(m === "POST" ? await readBackWrite(client, path, result) : result);
       } catch (e) {
         return fail(e);
       }
