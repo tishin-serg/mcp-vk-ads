@@ -20,6 +20,7 @@
     "build": "node scripts/clean-dist.mjs && tsc",
     "start": "node dist/index.js",
     "auth:setup": "node dist/setup-auth.js",
+    "auth:token": "node dist/setup-auth.js --access-token",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc -p tsconfig.check.json",
     "smoke": "node --import tsx src/smoke.ts",

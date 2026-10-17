@@ -41,14 +41,55 @@ npm run auth:setup
 - `client_id`;
 - `client_secret`.
 
+Сначала выберите тип подключения:
+
+- **Own / manager** — `client_credentials`, собственный кабинет.
+- **Agency / manager client** — временный manager token в памяти, чтение списка
+  клиентов через `GET v3/manager/clients.json`, выбор клиента и выпуск
+  `agency_client_credentials` с `agency_client_name=<username/login>`.
+
+В списке показываются login, имя (если API его вернул) и `user.id`; ID связи
+manager↔client не используется как ID рекламного пользователя. Если список
+недоступен, setup попросит точный login, а не произвольный numeric ID.
+
+Пример целевого локального подключения:
+
+```text
+manager 18752958
+        ↓
+client 707b7e2f6b@agency_client
+        ↓
+per-client OAuth token
+        ↓
+MCP (read-only)
+```
+
+Эти значения не зашиты в runtime. Для локальной проверки можно задать только
+несекретные ограничения `VK_ADS_EXPECTED_MANAGER_ID` и
+`VK_ADS_EXPECTED_AGENCY_CLIENT_NAME` перед setup. Другие клиенты не выбираются
+автоматически. Заданный expected login — явный выбор пользователя: setup
+сразу использует agency-режим и только этот login, без выбора другого клиента.
+
+Agency token проверяется через `GET v3/user.json` **до сохранения**: username
+должен совпасть с выбранным login, а user ID — с выбранным ID, если он известен.
+При несовпадении новый token не сохраняется и старое подключение не удаляется.
+Refresh использует `grant_type=refresh_token` с app credentials, затем повторно
+проверяет исходные username и ID до принятия token. Возврата к manager grant нет.
+При подтверждённом несовпадении после refresh старые agency credentials удаляются;
+при временной сетевой ошибке token не принимается, а файл сохраняется для retry.
+
+Исследованный OAuth contract и ограничения доказательств:
+[`docs/OAUTH-CONTRACT.md`](./docs/OAUTH-CONTRACT.md).
+
 `client_secret` вводится скрыто в локальном терминале. Его не нужно и нельзя присылать в ChatGPT.
 
 Setup:
 
 1. получает токен только с официального `https://ads.vk.com/api`;
 2. проверяет живым запросом, в какой VK Ads кабинет попал;
-3. сохраняет `client_secret`, access token и refresh token через Windows DPAPI `CurrentUser`;
-4. при неуспешной проверке удаляет сохранённые credentials.
+3. только после успешной проверки сохраняет app credentials, access/refresh token
+   и выбранный auth target через Windows DPAPI `CurrentUser`;
+4. при неуспешной проверке не сохраняет новый token и не заменяет старый файл.
 
 Файл `~/.config/mcp-vk-ads/credentials.json` на Windows содержит только DPAPI ciphertext. Расшифровать его может Windows-контекст того пользователя, под которым был выполнен setup.
 
@@ -56,11 +97,48 @@ Setup:
 
 ## Запуск MCP на Windows
 
+### Готовый клиентский токен (например, выданный eLama)
+
+Если вам выдали именно готовый access token для клиентского login, OAuth-пара
+`client_id/client_secret` для его использования не нужна:
+
+```powershell
+npm run auth:token
+```
+
+Эквивалент: `npm run auth:setup -- --access-token`. Setup запросит ожидаемый login
+клиента (или возьмёт явно заданный `VK_ADS_EXPECTED_AGENCY_CLIENT_NAME`), затем
+сам токен через **скрытый локальный ввод**. Не передавайте значение в argv, env,
+чат или файл. Вставляйте только токен, без префикса `Bearer`.
+
+Этот сценарий делает только `GET v3/user.json`, проверяет точный username и
+сохраняет token с подтверждённым user ID через DPAPI CurrentUser. При другом
+кабинете или ошибке новый token не сохраняется, старое подключение сохраняется.
+App credentials и refresh token не выдумываются и не записываются.
+
+`auth_status` показывает `authMethod=access-token`, `canRefresh=false` и
+`expiresAtKnown=false`: срок действия из голого token не установлен. Setup не
+декодирует JWT и не обещает бессрочное действие. При HTTP 401 нужно получить
+новый token у выдавшей стороны и снова выполнить `npm run auth:token` локально.
+Ни одного нового MCP-инструмента для передачи token через AI не добавлено.
+
+Первый реальный запуск должен оставаться read-only. Верификация API обязательна:
+надпись «токен» в письме сама по себе не доказывает формат или валидность строки.
+
 После `npm ci` и `npm run auth:setup` сервер можно запустить:
 
 ```powershell
 npm start
 ```
+
+Простой Windows launcher (секретов внутри нет, режим по умолчанию read-only):
+
+```powershell
+powershell.exe -NoProfile -File .\scripts\start-windows.ps1
+```
+
+Явный `-Mode draft` / `-Mode full` действует только на текущий процесс; launcher
+требует оба утверждённых budget cap. Не включайте full постоянно.
 
 Для MCP-клиента запускайте локальный файл:
 
@@ -110,6 +188,15 @@ Upstream `start_login` / `finish_login` передавал `client_secret` че�
 6. Активация и изменение боевого бюджета доступны только в явно разрешённом режиме и в пределах серверных caps.
 
 ## Проверки
+
+Проверка живого read-only кабинета 2026-10-17 выявила и исправила маршрут
+статистики: диапазонная сводка берётся из v3 `/statistics/{entity}/day.json`
+(метрики через `fields`), дневные строки — из v2 `/day.json` (через `metrics`).
+Оба режима требуют даты. week/month явно не поддерживаются; параметры пагинации
+и сортировки доступны только для summary. Подробности:
+[`get_statistics`](./docs/capabilities/get-statistics.md).
+API total относится к возвращённой странице, а не ко всему кабинету; при
+autoPaginate он опускается, чтобы не выдать неполный итог за общий.
 
 CI проверяет Ubuntu Node 20/22/24 и Windows Node 22:
 

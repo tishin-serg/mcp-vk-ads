@@ -40,7 +40,7 @@
 
 | Инструмент | Что делает |
 | --- | --- |
-| `get_statistics` | Отчёты сервиса статистики v3 по `ad_plans` / `ad_groups` / `banners` с группировкой `day` / `week` / `month` / `summary`. Метрики — под ключом `base` (показы, клики, расход, …). |
+| `get_statistics` | Обязательны dateFrom/dateTo. `summary`: сводка через v3 `/day.json`, метрики `total.base`, пагинация/сортировка. `day`: дневные `rows[].base` через v2 `/day.json` без пагинации. week/month не поддерживаются. |
 | `raw_request` | Прямой вызов любого эндпоинта (`path`, `method`, `query`, `body`). GET свободен; POST/DELETE требуют `confirmWrite=true`. |
 
 ## Деньги, статусы и постраничная выдача

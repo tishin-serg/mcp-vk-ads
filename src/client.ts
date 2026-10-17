@@ -1,4 +1,5 @@
 import { AuthRequiredError, TokenStore } from "./auth.js";
+import { assertTrustedApiBase } from "./config.js";
 import type { VkAdsConfig } from "./types.js";
 import { VkAdsError } from "./types.js";
 
@@ -41,7 +42,7 @@ export class VkAdsClient {
     tokens?: TokenStore,
   ) {
     // Normalize to a trailing slash so relative paths ("v2/ad_plans.json") resolve.
-    this.base = config.apiBase.endsWith("/") ? config.apiBase : config.apiBase + "/";
+    this.base = `${assertTrustedApiBase(config.apiBase)}/`;
     this.timeoutMs = config.timeoutMs ?? 60_000;
     this.maxRetries = config.maxRetries ?? 3;
     this.retryBaseMs = config.retryBaseMs ?? 500;
@@ -82,7 +83,7 @@ export class VkAdsClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const res = await fetch(url, { ...init, signal: controller.signal });
+      const res = await fetch(url, { ...init, redirect: "error", signal: controller.signal });
       const text = await res.text();
       return { res, text };
     } catch (err) {
@@ -194,6 +195,12 @@ export class VkAdsClient {
         }
       }
 
+      if (!res.ok && res.status === 401 && this.tokens.status().authMethod === "access-token") {
+        throw new AuthRequiredError(
+          "VK отклонил готовый токен (HTTP 401): он истёк или отозван. " +
+          "Автоматического refresh нет. Получите новый у выдавшей стороны и запустите npm run auth:token локально.",
+        );
+      }
       if (!res.ok) throw new VkAdsError(res.status, data);
       return data as T;
     }

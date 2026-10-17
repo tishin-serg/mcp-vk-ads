@@ -13,19 +13,23 @@ export function registerStatisticsTools(server: McpServer, client: VkAdsClient):
       title: "Статистика",
       annotations: READ_ONLY,
       description:
-        "Возвращает статистику по кампаниям (ad_plans), группам объявлений (ad_groups) или объявлениям (banners) из сервиса статистики VK Рекламы v3. По умолчанию группировка `summary` — одна сводная строка на объект за весь период; day/week/month нужны ТОЛЬКО для динамики по дням и вопросов про тренд (каждая добавляет по строке на объект за период). Ранжирование на стороне сервера — через sortBy (например, base.spent) и order; в ответе есть также `total` — сводка по ВСЕМ объектам за период (для вопросов «сколько всего» суммировать строки не нужно). Метрики лежат в `base` (shows, clicks, spent, ...); spent — в валюте аккаунта.",
+        "Возвращает статистику по ad_plans/ad_groups/banners за явно заданные dateFrom/dateTo. " +
+        "summary (по умолчанию): сводные total.base на объект, через v3/statistics/{entity}/day.json с пагинацией и сортировкой. " +
+        "day: дневные rows через v2/statistics/{entity}/day.json без пагинации/сортировки. " +
+        "week/month не поддерживаются. Верхний total относится к возвращённой странице, не ко всему кабинету. " +
+        "При autoPaginate общий total опускается: анализируйте total каждого объекта. spent — в валюте кабинета.",
       inputSchema: {
         entity: z.enum(ENTITIES).optional().describe("Тип объектов для отчёта. По умолчанию banners."),
         period: z
           .enum(PERIODS)
           .optional()
-          .describe("Группировка: summary (весь период, по умолчанию) либо day/week/month для динамики."),
+          .describe("summary — сводка за выбранные даты; day — дневные rows. week/month не поддерживаются."),
         ids: z
           .array(z.number().int())
           .optional()
           .describe("Ограничить отчёт этими id объектов (выбранного entity)."),
-        dateFrom: isoDate().optional().describe("Дата начала, YYYY-MM-DD (обязательна для day/week/month)."),
-        dateTo: isoDate().optional().describe("Дата окончания, YYYY-MM-DD (обязательна для day/week/month)."),
+        dateFrom: isoDate().optional().describe("Обязательная дата начала, YYYY-MM-DD."),
+        dateTo: isoDate().optional().describe("Обязательная дата окончания, YYYY-MM-DD."),
         metrics: z
           .array(z.string())
           .optional()
@@ -44,15 +48,23 @@ export function registerStatisticsTools(server: McpServer, client: VkAdsClient):
       try {
         const ent = entity ?? "banners";
         const grp = period ?? "summary";
-        if (grp !== "summary" && (!dateFrom || !dateTo)) {
-          return fail(`Для группировки "${grp}" нужны и dateFrom, и dateTo (YYYY-MM-DD).`);
+        if (grp === "week" || grp === "month") {
+          return fail("week/month не поддерживаются VK endpoint. Используйте day и агрегируйте дневные rows отдельно.");
         }
-        const path = `v3/statistics/${ent}/${grp}.json`;
+        if (!dateFrom || !dateTo) return fail("Нужны и dateFrom, и dateTo (YYYY-MM-DD), в том числе для summary.");
+        if (dateFrom > dateTo) return fail("dateFrom не может быть позже dateTo.");
+        const summary = grp === "summary";
+        if (!summary && (autoPaginate || limit !== undefined || offset !== undefined || sortBy !== undefined || order !== undefined)) {
+          return fail("day возвращает дневные rows из API v2 без пагинации и сортировки; уберите limit/offset/autoPaginate/sortBy/order или используйте summary.");
+        }
+        // VK v3 /day.json returns range totals, not daily rows. /summary.json is 404.
+        // v2 /summary.json is lifetime data and must not silently ignore requested dates.
+        const path = `${summary ? "v3" : "v2"}/statistics/${ent}/day.json`;
         const query = compact({
           id: csv(ids),
           date_from: dateFrom,
           date_to: dateTo,
-          metrics: csv(metrics),
+          ...(summary ? { fields: csv(metrics) } : { metrics: csv(metrics) }),
           sort_by: sortBy,
           d: order, // VK direction param (asc|desc); passing sort_by selects v3 sorting
           limit,
@@ -67,6 +79,13 @@ export function registerStatisticsTools(server: McpServer, client: VkAdsClient):
             `Статистика вернула 0 объектов по ids [${ids.join(", ")}] (entity ${ent}, группировка ${grp}). ` +
               "Проверить id и диапазон дат — снимать фильтр вслепую не нужно.",
           );
+        }
+        if (result && typeof result === "object" && !Array.isArray(result)) {
+          const { total, ...rest } = result as Record<string, unknown>;
+          if (autoPaginate) {
+            return ok({ ...rest, _totalScope: "not-provided", _totalNote: "API total является итогом страницы и опущен при autoPaginate. Используйте items[].total; производные метрики нельзя суммировать." });
+          }
+          return ok({ ...rest, ...(total === undefined ? {} : { total }), _totalScope: "returned-items" });
         }
         return ok(result);
       } catch (e) {

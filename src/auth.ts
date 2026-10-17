@@ -6,6 +6,8 @@ import {
   type StoredCredentials,
 } from "./credentials.js";
 import { expiresAtFrom, mintToken, refreshAccessToken, type TokenResponse } from "./oauth.js";
+import { validateAuthTarget, type AuthTarget } from "./authTarget.js";
+import { AccountMismatchError, verifyTokenAccount } from "./accountVerification.js";
 
 /**
  * Raised when a tool needs a token and none is available. The message is the
@@ -26,6 +28,8 @@ export type TokenSource = "env" | "stored";
 
 export interface AuthStatus {
   configured: boolean;
+  authMethod?: "oauth" | "access-token";
+  expiresAtKnown?: boolean;
   source?: TokenSource;
   /** ISO date the stored access token expires; absent for env tokens. */
   expiresAt?: string;
@@ -36,6 +40,7 @@ export interface AuthStatus {
   clientId?: string;
   /** VK Ads username the token resolved to at login. */
   username?: string;
+  target?: AuthTarget;
   path: string;
 }
 
@@ -44,6 +49,7 @@ export const NOT_CONNECTED_MESSAGE =
   "Это не сбой сети — повторный вызов не поможет. " +
   "На Windows запустите локально `npm run auth:setup` в папке hardened MCP: " +
   "команда сама получит токен и сохранит credentials через DPAPI CurrentUser. " +
+  "Для готового клиентского токена используйте npm run auth:token со скрытым локальным вводом. " +
   "Не передавайте client_secret или access token через AI-чат. " +
   "Для временных/CI-сценариев можно локально задать VK_ADS_TOKEN.";
 
@@ -101,19 +107,54 @@ export class TokenStore {
    * Local-only helper used by the Windows setup CLI. It must never be exposed as
    * an MCP tool accepting client_secret from model context.
    */
-  async connect(params: { clientId: string; clientSecret: string }): Promise<StoredCredentials> {
+  async connect(params: { clientId: string; clientSecret: string; target?: AuthTarget }): Promise<StoredCredentials> {
+    const target = validateAuthTarget(params.target);
+    if (target.type === "agency-client") return this.connectVerified({ ...params, target });
     const response = await mintToken({
       clientId: params.clientId,
       clientSecret: params.clientSecret,
+      target,
       apiBase: this.apiBase,
       fetchImpl: this.fetchImpl,
     });
     return this.save(response, { clientId: params.clientId, clientSecret: params.clientSecret });
   }
 
+  /** CLI entry: verify in memory BEFORE replacing any existing credential file. */
+  async connectVerified(params: { clientId: string; clientSecret: string; target?: AuthTarget }): Promise<StoredCredentials> {
+    const target = validateAuthTarget(params.target);
+    const response = await mintToken({ ...params, target, apiBase: this.apiBase, fetchImpl: this.fetchImpl });
+    const user = await verifyTokenAccount(response.access_token, target, { apiBase: this.apiBase, fetchImpl: this.fetchImpl });
+    const boundTarget: AuthTarget = target.type === "agency-client" ? { ...target, userId: user.id } : target;
+    return this.save(response, { ...params, target: boundTarget, username: user.username });
+  }
+
+  /** Local-only import: one GET, no OAuth request or guessed refresh credentials. */
+  async importAccessToken(params: {
+    accessToken: string;
+    target: Extract<AuthTarget, { type: "agency-client" }>;
+  }): Promise<StoredCredentials> {
+    const target = validateAuthTarget(params.target);
+    if (target.type !== "agency-client") throw new Error("Для импорта требуется явный agency client target.");
+    if (typeof params.accessToken !== "string" || !params.accessToken || /\s|[\u0000-\u001f\u007f]/.test(params.accessToken)) {
+      throw new Error("Введите только токен без Bearer, кавычек и пробелов.");
+    }
+    const user = await verifyTokenAccount(params.accessToken, target, { apiBase: this.apiBase, fetchImpl: this.fetchImpl });
+    const credentials: StoredCredentials = {
+      authMethod: "access-token", access_token: params.accessToken,
+      obtained_at: Date.now(), username: user.username,
+      target: { ...target, userId: user.id },
+    };
+    writeCredentials(credentials);
+    return credentials;
+  }
+
   /** Re-mints the access token from protected stored refresh credentials. */
   async refresh(): Promise<StoredCredentials> {
     const stored = readCredentials();
+    if (stored?.authMethod === "access-token") {
+      throw new AuthRequiredError("Готовый токен не продлевается автоматически. Получите новый у выдавшей стороны и выполните npm run auth:token локально.");
+    }
     if (!stored?.refresh_token || !stored.client_id || !stored.client_secret) {
       throw new AuthRequiredError(
         "Нет сохранённых данных для обновления токена VK Рекламы. " +
@@ -127,18 +168,32 @@ export class TokenStore {
       apiBase: this.apiBase,
       fetchImpl: this.fetchImpl,
     });
+    const target = validateAuthTarget(stored.target);
+    if (target.type === "agency-client") {
+      try {
+        await verifyTokenAccount(response.access_token, target, { apiBase: this.apiBase, fetchImpl: this.fetchImpl });
+      } catch (error) {
+        // Discard a known wrong account, but never delete a newer local login.
+        if (error instanceof AccountMismatchError && readCredentials()?.access_token === stored.access_token) clearCredentials();
+        throw error;
+      }
+      if (readCredentials()?.access_token !== stored.access_token) {
+        throw new Error("Локальное подключение изменилось во время refresh; старый результат не сохранён.");
+      }
+    }
     return this.save(response, {
       clientId: stored.client_id,
       clientSecret: stored.client_secret,
       username: stored.username,
       fallbackRefreshToken: stored.refresh_token,
+      target: stored.target,
     });
   }
 
   /** True when a stored refresh is possible — i.e. a retry after 401 is worth trying. */
   canRefresh(): boolean {
     const stored = this.envToken ? undefined : readCredentials();
-    return Boolean(stored?.refresh_token && stored.client_id && stored.client_secret);
+    return Boolean(stored?.authMethod !== "access-token" && stored?.refresh_token && stored.client_id && stored.client_secret);
   }
 
   /** Persists a token response; returns what was stored (never logged). */
@@ -149,6 +204,7 @@ export class TokenStore {
       clientSecret: string;
       username?: string;
       fallbackRefreshToken?: string;
+      target?: AuthTarget;
     },
     now = Date.now(),
   ): StoredCredentials {
@@ -160,6 +216,7 @@ export class TokenStore {
       expires_at: expiresAtFrom(response.expires_in, now),
       obtained_at: now,
       username: app.username,
+      target: app.target,
     };
     writeCredentials(credentials);
     return credentials;
@@ -186,11 +243,14 @@ export class TokenStore {
     return {
       configured: true,
       source: "stored",
+      authMethod: stored.authMethod ?? "oauth",
+      expiresAtKnown: stored.expires_at !== undefined,
       expiresAt: stored.expires_at ? new Date(stored.expires_at).toISOString() : undefined,
       obtainedAt: new Date(stored.obtained_at).toISOString(),
       canRefresh: Boolean(stored.refresh_token && stored.client_id && stored.client_secret),
       clientId: stored.client_id,
       username: stored.username,
+      target: stored.target,
       path,
     };
   }
